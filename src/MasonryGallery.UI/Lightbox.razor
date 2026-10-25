@@ -1,0 +1,333 @@
+@implements IAsyncDisposable
+@inject GalleryService Gallery
+@inject IJSRuntime JS
+
+<div class="lb" role="dialog" aria-modal="true" aria-label="Media viewer" tabindex="0" @ref="_root"
+     @onkeydown="OnKey" @onkeydown:stopPropagation="true">
+    <div class="lb-top">
+        <div class="lb-title">
+            <strong>@_item?.FileName</strong>
+            @if (_item is not null)
+            {
+                <small>@Describe(_item)</small>
+            }
+        </div>
+        <div class="lb-actions">
+            @if (_item is not null)
+            {
+                <button type="button" class="icon-btn fav-btn" aria-pressed="@Bool(_item.Favorite)" aria-label="Favorite" title="Favorite (F)"
+                        @onclick="ToggleFavorite">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7.5-4.6-7.5-10.3A4.2 4.2 0 0 1 12 7.2a4.2 4.2 0 0 1 7.5 2.5C19.5 15.4 12 20 12 20z"/></svg>
+                </button>
+                <button type="button" class="icon-btn" aria-pressed="@Bool(_info)" aria-label="Details" title="Details (I)"
+                        @onclick="() => _info = !_info">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+                </button>
+                <button type="button" class="icon-btn" aria-label="Open in default app" title="Open in default app (O)"
+                        @onclick="() => OpenExternallyAsync(false)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+                </button>
+            }
+            <button type="button" class="icon-btn" aria-label="Close" title="Close (Esc)" @onclick="CloseAsync">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <div class="lb-body">
+        <div class="lb-stage" @ref="_stage" @onclick="CloseAsync">
+            <button type="button" class="nav prev" aria-label="Previous" disabled="@(_pos <= 0)"
+                    @onclick="() => GoAsync(-1)" @onclick:stopPropagation="true">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg>
+            </button>
+
+            @if (_item is not null)
+            {
+                @if (_item.Kind == MediaKind.Video)
+                {
+                    @if (_videoFailed || (_item.Playable == false && !_tryAnyway))
+                    {
+                        <div class="lb-fallback" @onclick:stopPropagation="true">
+                            <p>@(_videoFailed ? "This video can't be played here." : "This video's format usually can't be played here.")</p>
+                            <div class="row">
+                                <button type="button" class="btn primary" @onclick="() => OpenExternallyAsync(false)">Open in default player</button>
+                                @if (!_videoFailed)
+                                {
+                                    <button type="button" class="btn" @onclick="() => _tryAnyway = true">Try here anyway</button>
+                                }
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <video @key="_item.Id" src="@Gallery.GetMediaUrl(_item.Id)" controls autoplay playsinline
+                               poster="@Gallery.GetThumbnailUrl(_item.Id, "medium")"
+                               @onerror="() => _videoFailed = true"
+                               @onclick:stopPropagation="true"></video>
+                    }
+                }
+                else
+                {
+                    @* Known dimensions size the box at once; the 960 px preview fills it until the original arrives. *@
+                    <img @key="_item.Id" class="zoomable" src="@Gallery.GetMediaUrl(_item.Id)" alt="@_item.FileName"
+                         width="@_item.Width" height="@_item.Height" draggable="false"
+                         style="background-image: url('@Gallery.GetThumbnailUrl(_item.Id, "medium")')"
+                         @onclick:stopPropagation="true" />
+                }
+            }
+
+            <button type="button" class="nav next" aria-label="Next" disabled="@(_pos >= Ids.Length - 1)"
+                    @onclick="() => GoAsync(1)" @onclick:stopPropagation="true">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+            </button>
+        </div>
+
+        @if (_info && _item is not null)
+        {
+            <aside class="lb-info" aria-label="Details">
+                <dl>
+                    <dt>Folder</dt>
+                    <dd title="@Folder(_item)">@Folder(_item)</dd>
+                    <dt>Library</dt>
+                    <dd>@(Libraries.FirstOrDefault(l => l.Id == _item.LibraryId)?.Name ?? "—")</dd>
+                    @if (_item.Width is > 0 && _item.Height is > 0)
+                    {
+                        <dt>Dimensions</dt>
+                        <dd>@_item.Width × @_item.Height</dd>
+                    }
+                    @if (_item.DurationMs is > 0)
+                    {
+                        <dt>Duration</dt>
+                        <dd>@FormatDuration(_item.DurationMs.Value)</dd>
+                    }
+                    <dt>Size</dt>
+                    <dd>@FormatSize(_item.SizeBytes)</dd>
+                    @if (_item.DateTaken is { } taken)
+                    {
+                        <dt>Taken</dt>
+                        <dd>@taken.ToLocalTime().ToString("d MMM yyyy, HH:mm")</dd>
+                    }
+                    <dt>Added</dt>
+                    <dd>@_item.DateAdded.ToLocalTime().ToString("d MMM yyyy")</dd>
+                </dl>
+
+                <h3>Tags</h3>
+                <div class="tag-list">
+                    @foreach (var tag in _tags)
+                    {
+                        <span class="tag-chip">
+                            @tag
+                            <button type="button" aria-label="Remove tag @tag" @onclick="() => RemoveTagAsync(tag)">×</button>
+                        </span>
+                    }
+                </div>
+                @* Keys typed here must not drive the viewer (F, I, arrows...). *@
+                <input type="text" class="tag-input" list="lb-all-tags" placeholder="Add a tag and press Enter" aria-label="Add tag"
+                       @bind="_newTag" @bind:event="oninput" @onkeydown="OnTagKeyAsync" @onkeydown:stopPropagation="true" />
+                <datalist id="lb-all-tags">
+                    @foreach (var t in AllTags)
+                    {
+                        <option value="@t.Name"></option>
+                    }
+                </datalist>
+
+                <button type="button" class="btn" @onclick="() => OpenExternallyAsync(true)">Show in folder</button>
+            </aside>
+        }
+    </div>
+
+    @* Neighbours load in the background so arrowing through is instant. *@
+    <div hidden aria-hidden="true">
+        @foreach (var n in _neighbors)
+        {
+            <img src="@(n.Kind == MediaKind.Image ? Gallery.GetMediaUrl(n.Id) : Gallery.GetThumbnailUrl(n.Id, "medium"))" alt="" />
+        }
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="lb-toast" role="alert">@_error</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public int[] Ids { get; set; } = [];
+    [Parameter, EditorRequired] public int CurrentId { get; set; }
+    [Parameter] public IReadOnlyList<Library> Libraries { get; set; } = [];
+    [Parameter] public IReadOnlyList<TagCount> AllTags { get; set; } = [];
+    /// <summary>Receives the item shown last, so the grid can scroll to it.</summary>
+    [Parameter] public EventCallback<int> OnClose { get; set; }
+    [Parameter] public EventCallback<(int Id, bool Favorite)> OnFavoriteChanged { get; set; }
+    [Parameter] public EventCallback OnTagsChanged { get; set; }
+
+    private ElementReference _root, _stage;
+    private IJSObjectReference? _module, _zoom;
+    private MediaItem? _item;
+    private IReadOnlyList<string> _tags = [];
+    private IReadOnlyList<MediaItem> _neighbors = [];
+    private string _newTag = "";
+    private string? _error;
+    private int _pos, _loadedId = -1;
+    private bool _focus = true, _info, _videoFailed, _tryAnyway;
+    private CancellationTokenSource? _errorTimer;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (CurrentId == _loadedId) return;
+        await LoadAsync(CurrentId);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/MasonryGallery.UI/js/lightbox.js");
+            _zoom = await _module.InvokeAsync<IJSObjectReference>("create", _stage);
+        }
+        if (!_focus) return;
+        _focus = false;
+        await _root.FocusAsync();
+    }
+
+    private async Task LoadAsync(int id)
+    {
+        _loadedId = id;
+        _pos = Array.IndexOf(Ids, id);
+        _item = await Gallery.GetMediaAsync(id);
+        _tags = _item is null ? [] : await Gallery.GetTagsAsync(id);
+        _videoFailed = _tryAnyway = false;
+        _newTag = "";
+        if (_zoom is not null) await _zoom.InvokeVoidAsync("reset");
+
+        var neighbors = new List<MediaItem>(2);
+        foreach (var p in new[] { _pos + 1, _pos - 1 })
+        {
+            if (p >= 0 && p < Ids.Length && await Gallery.GetMediaAsync(Ids[p]) is { } n)
+                neighbors.Add(n);
+        }
+        _neighbors = neighbors;
+    }
+
+    private async Task GoAsync(int delta)
+    {
+        var next = _pos + delta;
+        if (next < 0 || next >= Ids.Length) return;
+        await LoadAsync(Ids[next]);
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync(_loadedId);
+
+    private async Task ToggleFavorite()
+    {
+        if (_item is null) return;
+        _item.Favorite = !_item.Favorite;
+        await Gallery.SetFavoriteAsync(_item.Id, _item.Favorite);
+        await OnFavoriteChanged.InvokeAsync((_item.Id, _item.Favorite));
+    }
+
+    private async Task OnTagKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_newTag) && _item is not null)
+        {
+            var tag = _newTag.Trim();
+            _newTag = "";
+            if (_tags.Contains(tag, StringComparer.OrdinalIgnoreCase)) return;
+            await SaveTagsAsync([.. _tags, tag]);
+        }
+        else if (e.Key == "Escape")
+        {
+            await _root.FocusAsync();
+        }
+    }
+
+    private Task RemoveTagAsync(string tag)
+        => SaveTagsAsync(_tags.Where(t => !string.Equals(t, tag, StringComparison.OrdinalIgnoreCase)).ToList());
+
+    private async Task SaveTagsAsync(IReadOnlyList<string> tags)
+    {
+        if (_item is null) return;
+        await Gallery.SetTagsAsync(_item.Id, tags);
+        _tags = await Gallery.GetTagsAsync(_item.Id);
+        await OnTagsChanged.InvokeAsync();
+    }
+
+    private async Task OpenExternallyAsync(bool showFolder)
+    {
+        if (_item is null) return;
+        var result = await Gallery.OpenExternallyAsync(_item.Id, showFolder);
+        if (!result.IsSuccess) await ShowErrorAsync(result.Error!);
+    }
+
+    private async Task ShowErrorAsync(string message)
+    {
+        _errorTimer?.Cancel();
+        _errorTimer = new CancellationTokenSource();
+        var token = _errorTimer.Token;
+        _error = message;
+        StateHasChanged();
+        try
+        {
+            await Task.Delay(4000, token);
+            _error = null;
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private async Task OnKey(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Escape": await CloseAsync(); break;
+            case "ArrowLeft": await GoAsync(-1); break;
+            case "ArrowRight": await GoAsync(1); break;
+            case "f" or "F": await ToggleFavorite(); break;
+            case "i" or "I": _info = !_info; break;
+            case "o" or "O": await OpenExternallyAsync(false); break;
+            case "+" or "=": if (_zoom is not null) await _zoom.InvokeVoidAsync("zoomIn"); break;
+            case "-": if (_zoom is not null) await _zoom.InvokeVoidAsync("zoomOut"); break;
+            case "0": if (_zoom is not null) await _zoom.InvokeVoidAsync("reset"); break;
+        }
+    }
+
+    private static string Folder(MediaItem m)
+    {
+        var dir = Path.GetDirectoryName(m.RelPath)?.Replace('\\', '/');
+        return string.IsNullOrEmpty(dir) ? "/" : dir;
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        >= 1 << 30 => $"{bytes / 1073741824.0:0.#} GB",
+        >= 1 << 20 => $"{bytes / 1048576.0:0.#} MB",
+        >= 1 << 10 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes} B"
+    };
+
+    private static string FormatDuration(long ms)
+        => TimeSpan.FromMilliseconds(ms).ToString(ms >= 3_600_000 ? @"h\:mm\:ss" : @"m\:ss");
+
+    private static string Describe(MediaItem m)
+    {
+        var parts = new List<string>();
+        if (m.Width is > 0 && m.Height is > 0) parts.Add($"{m.Width}×{m.Height}");
+        if (m.DurationMs is > 0) parts.Add(FormatDuration(m.DurationMs.Value));
+        parts.Add(FormatSize(m.SizeBytes));
+        if (m.DateTaken is { } d) parts.Add(d.ToLocalTime().ToString("d MMM yyyy"));
+        return string.Join(" · ", parts);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _errorTimer?.Cancel();
+        try
+        {
+            if (_zoom is not null)
+            {
+                await _zoom.InvokeVoidAsync("dispose");
+                await _zoom.DisposeAsync();
+            }
+            if (_module is not null) await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+    }
+}

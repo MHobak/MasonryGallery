@@ -1,0 +1,45 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+publish/
+*.nupkg
+
+# Test and benchmark results
+TestResults/
+*.trx
+coverage*.xml
+coverage*.json
+BenchmarkDotNet.Artifacts/
+
+# IDE and editor state
+.vs/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.user
+*.suo
+*.swp
+*~
+
+# OS files
+.directory
+.DS_Store
+Thumbs.db
+
+# Runtime data. Builds before the move to XDG folders wrote logs next to the working directory.
+logs/
+*.db
+*.db-shm
+*.db-wal
+
+# Front-end tooling (layout.js tests)
+node_modules/
+
+# Bundled ffmpeg binaries are fetched by the packaging scripts, not committed
+tools/ffmpeg/

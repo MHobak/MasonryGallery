@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>MasonryGallery.Domain</RootNamespace>
+  </PropertyGroup>
+</Project>

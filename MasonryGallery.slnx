@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MasonryGallery.Application/MasonryGallery.Application.csproj" />
+    <Project Path="src/MasonryGallery.Domain/MasonryGallery.Domain.csproj" />
+    <Project Path="src/MasonryGallery.Host/MasonryGallery.Host.csproj" />
+    <Project Path="src/MasonryGallery.Infrastructure/MasonryGallery.Infrastructure.csproj" />
+    <Project Path="src/MasonryGallery.UI/MasonryGallery.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MasonryGallery.Application.Tests/MasonryGallery.Application.Tests.csproj" />
+    <Project Path="tests/MasonryGallery.Benchmarks/MasonryGallery.Benchmarks.csproj" />
+    <Project Path="tests/MasonryGallery.Domain.Tests/MasonryGallery.Domain.Tests.csproj" />
+    <Project Path="tests/MasonryGallery.Infrastructure.Tests/MasonryGallery.Infrastructure.Tests.csproj" />
+    <Project Path="tests/MasonryGallery.UI.Tests/MasonryGallery.UI.Tests.csproj" />
+  </Folder>
+</Solution>

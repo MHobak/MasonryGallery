@@ -1,0 +1,187 @@
+@inject GalleryService Gallery
+@inject FolderPicker Picker
+
+<div class="scrim" @onclick="OnClose"></div>
+<aside class="drawer" role="dialog" aria-modal="true" aria-label="Libraries">
+    <div class="drawer-head">
+        <h2>Libraries</h2>
+        <button type="button" class="icon-btn" aria-label="Close" @onclick="OnClose">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+    </div>
+
+    <ul class="libs">
+        @foreach (var l in Libraries)
+        {
+            <li class="@(l.Enabled ? "" : "disabled")">
+                <div class="lib-info">
+                    <strong>@l.Name</strong>
+                    <small title="@l.RootPath">@l.RootPath</small>
+                    <span class="tag @StatusClass(l)">@StatusText(l)</span>
+                    @if (l.Enabled && WatchStatuses.TryGetValue(l.Id, out var watch) && WatchText(watch) is { } text)
+                    {
+                        <small class="watch @watch.Mode.ToString().ToLowerInvariant()" title="@watch.Reason">@text</small>
+                    }
+                </div>
+                <div class="lib-actions">
+                    <button type="button" class="btn" disabled="@(Busy || !l.Enabled)" @onclick="() => OnRescan.InvokeAsync(l.Id)">Rescan</button>
+                    @if (_confirmRemove == l.Id)
+                    {
+                        <button type="button" class="btn danger" disabled="@Busy" @onclick="() => RemoveAsync(l)">Remove</button>
+                        <button type="button" class="btn" @onclick="() => _confirmRemove = null">Keep</button>
+                    }
+                    else
+                    {
+                        <button type="button" class="btn" disabled="@Busy" @onclick="() => _confirmRemove = l.Id">Remove…</button>
+                    }
+                </div>
+                @if (_confirmRemove == l.Id)
+                {
+                    <p class="hint">Forgets this library's index, tags and favorites. Your files are not touched.</p>
+                }
+                <div class="lib-options">
+                    <label><input type="checkbox" checked="@l.Enabled" disabled="@Busy"
+                                  @onchange="e => SetOptionsAsync(l, (bool)e.Value!, l.FollowSymlinks)" /> Show and scan</label>
+                    <label title="Index files reached through symbolic links. Takes effect on the next scan.">
+                        <input type="checkbox" checked="@l.FollowSymlinks" disabled="@Busy"
+                               @onchange="e => SetOptionsAsync(l, l.Enabled, (bool)e.Value!)" /> Follow symlinks</label>
+                </div>
+            </li>
+        }
+        @if (Libraries.Count == 0)
+        {
+            <li class="muted">No libraries yet.</li>
+        }
+    </ul>
+
+    @if (_error is not null)
+    {
+        <p class="error" role="alert">@_error</p>
+    }
+
+    <form class="add" @onsubmit="AddAsync">
+        <h3>Add a library</h3>
+        <div class="row">
+            <input type="text" placeholder="/path/to/photos" aria-label="Folder path" @bind="_path" @bind:event="oninput" />
+            @if (Picker.Pick is not null)
+            {
+                <button type="button" class="btn" @onclick="Browse">Browse</button>
+            }
+        </div>
+        <input type="text" placeholder="Name (optional)" aria-label="Library name" @bind="_name" />
+        <button type="submit" class="btn primary" disabled="@string.IsNullOrWhiteSpace(_path)">Add and scan</button>
+    </form>
+
+    @if (_failedCount > 0)
+    {
+        <section class="problems">
+            <h3>Problems <span class="count">@_failedCount.ToString("N0")</span></h3>
+            <p class="hint">These files couldn't be read or previewed. They are retried when they change.</p>
+            <ul>
+                @foreach (var f in _failed)
+                {
+                    <li>
+                        <span class="name" title="@f.RelPath">@f.FileName</span>
+                        <small>@f.LibraryName · @(f.Stage == "probe" ? "unreadable" : "no preview")</small>
+                        <button type="button" class="btn small" @onclick="() => ShowAsync(f.Id)">Show in folder</button>
+                    </li>
+                }
+            </ul>
+            @if (_failedCount > _failed.Count)
+            {
+                <p class="hint">Showing the latest @_failed.Count.</p>
+            }
+        </section>
+    }
+</aside>
+
+@code {
+    [Parameter] public IReadOnlyList<Library> Libraries { get; set; } = [];
+    [Parameter] public IReadOnlyDictionary<LibraryId, WatchStatus> WatchStatuses { get; set; } = new Dictionary<LibraryId, WatchStatus>();
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<Library> OnAdded { get; set; }
+    [Parameter] public EventCallback<LibraryId> OnRescan { get; set; }
+    /// <summary>A library was removed, disabled or re-enabled: the gallery must reload.</summary>
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private string _path = "", _name = "";
+    private string? _error;
+    private LibraryId? _confirmRemove;
+    private int _failedCount;
+    private IReadOnlyList<FailedItem> _failed = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _failedCount = await Gallery.CountFailedAsync();
+        if (_failedCount > 0) _failed = await Gallery.GetFailedAsync(100);
+    }
+
+    private static string StatusClass(Library l) => l.Enabled ? l.Status.ToString().ToLowerInvariant() : "disabled";
+
+    private static string StatusText(Library l) => !l.Enabled ? "Hidden" : l.Status switch
+    {
+        LibraryStatus.Offline => "Offline — folder not available",
+        LibraryStatus.Error => "Last scan failed",
+        _ => l.Status.ToString()
+    };
+
+    private static string? WatchText(WatchStatus watch) => watch.Mode switch
+    {
+        WatchMode.Live => "Watching for changes",
+        WatchMode.Polling => watch.Reason ?? "Checked for changes every few minutes",
+        _ => null
+    };
+
+    private void Browse()
+    {
+        var picked = Picker.Pick?.Invoke();
+        if (!string.IsNullOrEmpty(picked)) _path = picked;
+    }
+
+    private async Task AddAsync()
+    {
+        _error = null;
+        var path = _path.Trim();
+        if (!Directory.Exists(path))
+        {
+            _error = "That folder does not exist.";
+            return;
+        }
+
+        path = Path.GetFullPath(path);
+        var name = string.IsNullOrWhiteSpace(_name) ? Path.GetFileName(path.TrimEnd('/', '\\')) : _name.Trim();
+        if (name.Length == 0) name = path;
+
+        var result = await Gallery.AddLibraryAsync(name, path);
+        if (!result.IsSuccess) { _error = result.Error; return; }
+        _path = _name = "";
+        await OnAdded.InvokeAsync(result.Value!);
+    }
+
+    private async Task RemoveAsync(Library library)
+    {
+        _error = null;
+        _confirmRemove = null;
+        var result = await Gallery.RemoveLibraryAsync(library.Id);
+        if (!result.IsSuccess) { _error = result.Error; return; }
+        await OnChanged.InvokeAsync();
+    }
+
+    private async Task SetOptionsAsync(Library library, bool enabled, bool followSymlinks)
+    {
+        _error = null;
+        var result = await Gallery.SetLibraryOptionsAsync(library, enabled, followSymlinks);
+        if (!result.IsSuccess) { _error = result.Error; return; }
+        await OnChanged.InvokeAsync();
+        // Turning a library back on, or changing what it indexes, needs a scan to catch up.
+        if (enabled && (!library.Enabled || followSymlinks != library.FollowSymlinks))
+            await OnRescan.InvokeAsync(library.Id);
+    }
+
+    private async Task ShowAsync(int mediaId)
+    {
+        var result = await Gallery.OpenExternallyAsync(mediaId, showFolder: true);
+        _error = result.IsSuccess ? null : result.Error;
+    }
+}
