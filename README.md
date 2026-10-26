@@ -82,8 +82,30 @@ The thumbnail cache is safe to delete; thumbnails are regenerated on the next st
 
 ```bash
 dotnet build
-dotnet test
+dotnet test                                   # unit, integration, component and architecture tests
+node --test tests/MasonryGallery.UI.Tests/js  # property tests for the masonry layout (layout.js)
+dotnet format MasonryGallery.slnx --verify-no-changes
 ```
+
+Performance (design §2): generate a synthetic 100k-file library once, then check the budgets or run the micro-benchmarks.
+
+```bash
+dotnet run -c Release --project tests/MasonryGallery.Benchmarks -- generate /tmp/mg-dataset
+dotnet run -c Release --project tests/MasonryGallery.Benchmarks -- budgets /tmp/mg-dataset   # exit 1 if a budget is missed by >20%
+dotnet run -c Release --project tests/MasonryGallery.Benchmarks -- micro
+```
+
+CI (`.github/workflows/ci.yml`) runs the format check, build, all tests on Ubuntu and Windows, and the budgets on pushes to `main`.
+
+## Build a release
+
+```bash
+scripts/fetch-ffmpeg.sh linux-x64   # optional: bundle an LGPL ffmpeg/ffprobe (checksum-verified download)
+scripts/publish.sh linux-x64        # self-contained build in artifacts/publish/linux-x64
+scripts/package-linux.sh            # AppImage and .deb in artifacts/packages (SKIP_APPIMAGE=1 for the .deb only)
+```
+
+Both packages use the system's WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian/Ubuntu, `webkit2gtk-4.1` on Arch/Fedora) and GStreamer codecs for video. `scripts/publish.sh win-x64` builds for Windows (needs the WebView2 runtime). Bundled components and their licences are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 Layout: `Domain` (models) → `Application` (scan pipeline, use cases) → `Infrastructure` (SQLite, Skia thumbnails, file enumeration) → `UI` (Blazor + JS masonry) → `Host` (Photino window + a Kestrel media server on a random loopback port, guarded by a per-launch token). Full design in [design-v2.md](design-v2.md).
 

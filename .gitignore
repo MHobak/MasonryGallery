@@ -43,3 +43,5 @@ node_modules/
 
 # Bundled ffmpeg binaries are fetched by the packaging scripts, not committed
 tools/ffmpeg/
+# appimagetool and other downloads made by the packaging scripts
+tools/cache/

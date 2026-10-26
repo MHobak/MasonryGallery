@@ -4,7 +4,8 @@
     <RootNamespace>MasonryGallery.Host</RootNamespace>
     <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <!-- Self-contained needs a runtime: the building machine's, unless publishing passes -r (linux-x64, win-x64). -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkPortableRuntimeIdentifier)</RuntimeIdentifier>
     <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
   </PropertyGroup>
   <ItemGroup>

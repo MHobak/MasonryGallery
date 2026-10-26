@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MasonryGallery
+GenericName=Photo and video gallery
+Comment=Browse photo and video folders in a masonry grid
+Exec=masonrygallery
+Icon=masonrygallery
+Terminal=false
+Categories=Graphics;Viewer;Photography;
+Keywords=photos;videos;gallery;images;slideshow;

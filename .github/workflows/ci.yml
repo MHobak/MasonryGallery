@@ -1,0 +1,86 @@
+# Build, test and format check on every push and pull request (design §12).
+# The performance budgets run on pushes to main and on demand: they need a generated 100k-file library.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Windows is the secondary target and hasn't been run yet; report its results without blocking until it has.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install ffmpeg (video tests)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Restore
+        run: dotnet restore MasonryGallery.slnx
+
+      - name: Format check
+        if: runner.os == 'Linux'
+        run: dotnet format MasonryGallery.slnx --verify-no-changes --no-restore
+
+      - name: Build (warnings are errors)
+        run: dotnet build MasonryGallery.slnx -c Release --no-restore
+
+      - name: .NET tests
+        run: dotnet test MasonryGallery.slnx -c Release --no-build --logger trx --results-directory TestResults
+
+      - name: Layout tests (layout.js)
+        run: node --test tests/MasonryGallery.UI.Tests/js
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults
+          if-no-files-found: ignore
+
+  budgets:
+    name: Performance budgets
+    needs: build-and-test
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # GitHub's standard Linux runners have 4 cores, like the budgets' reference machine.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build benchmarks
+        run: dotnet build tests/MasonryGallery.Benchmarks -c Release
+
+      - name: Generate a 100k-file library
+        run: dotnet run -c Release --no-build --project tests/MasonryGallery.Benchmarks -- generate "$RUNNER_TEMP/dataset"
+
+      - name: Check the budgets (fails when one is missed by more than 20%)
+        run: dotnet run -c Release --no-build --project tests/MasonryGallery.Benchmarks -- budgets "$RUNNER_TEMP/dataset"
