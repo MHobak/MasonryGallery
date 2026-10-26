@@ -3,6 +3,7 @@ namespace MasonryGallery.UI;
 using System.Diagnostics;
 using MasonryGallery.Application.Ports;
 using MasonryGallery.Application.Pipeline;
+using MasonryGallery.Application.Settings;
 using MasonryGallery.Application.UseCases;
 using MasonryGallery.Domain;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,6 +11,9 @@ using Microsoft.Extensions.Logging;
 
 /// <summary>Base URL and per-launch access token of the local media server.</summary>
 public sealed record MediaEndpoint(string BaseUrl, string Token);
+
+/// <summary>Where the app keeps its data and logs, for "open folder" actions.</summary>
+public sealed record AppFolders(string Data, string Logs);
 
 public sealed class GalleryService : IDisposable
 {
@@ -178,12 +182,14 @@ public sealed class GalleryService : IDisposable
         await Get<IMediaRepository>(scope).SetFavoriteAsync(mediaId, favorite, ct);
     }
 
-    public async Task<IReadOnlyList<string>> GetTagsAsync(int mediaId, CancellationToken ct = default)
+    /// <summary>All tags of an item: the user's own and those read from its sidecar (<see cref="Tag.FromSidecar"/>).</summary>
+    public async Task<IReadOnlyList<Tag>> GetTagsAsync(int mediaId, CancellationToken ct = default)
     {
         using var scope = _sp.CreateScope();
-        return (await Get<IMediaRepository>(scope).GetTagsForMediaAsync(mediaId, ct)).Select(t => t.Name).ToList();
+        return await Get<IMediaRepository>(scope).GetTagsForMediaAsync(mediaId, ct);
     }
 
+    /// <summary>Replaces the user's own tags; sidecar tags are unaffected.</summary>
     public async Task SetTagsAsync(int mediaId, IEnumerable<string> tags, CancellationToken ct = default)
     {
         using var scope = _sp.CreateScope();
@@ -194,6 +200,20 @@ public sealed class GalleryService : IDisposable
     {
         using var scope = _sp.CreateScope();
         return await Get<IMediaRepository>(scope).ListTagsAsync(ct);
+    }
+
+    /// <summary>Autocomplete: tags matching what was typed so far, most used first.</summary>
+    public async Task<IReadOnlyList<TagCount>> SearchTagsAsync(string prefix, int limit = 12, CancellationToken ct = default)
+    {
+        using var scope = _sp.CreateScope();
+        return await Get<IMediaRepository>(scope).SearchTagsAsync(prefix, limit, ct);
+    }
+
+    /// <summary>Creator, source link, title, description and rating from the item's XMP sidecar, if it has one.</summary>
+    public async Task<SidecarData?> GetSidecarAsync(int mediaId, CancellationToken ct = default)
+    {
+        using var scope = _sp.CreateScope();
+        return await Get<IMediaRepository>(scope).GetSidecarAsync(mediaId, ct);
     }
 
     // ── Problems ──
@@ -209,7 +229,33 @@ public sealed class GalleryService : IDisposable
         return await Get<IMediaRepository>(scope).GetFailedAsync(limit, ct);
     }
 
+    // ── Settings and cache ──
+    public AppSettings GetSettings() => _sp.GetRequiredService<ISettingsStore>().Current;
+
+    public AppSettings GetDefaultSettings() => _sp.GetRequiredService<ISettingsStore>().Defaults;
+
+    /// <summary>Validates and applies; workers and quality take effect from the next scan, ignore patterns rescan.</summary>
+    public Task<Result> SaveSettingsAsync(AppSettings settings, CancellationToken ct = default)
+        => _sp.GetRequiredService<ISettingsStore>().SaveAsync(settings, ct);
+
+    public Task<(CacheUsage Thumbnails, CacheUsage Previews)> GetCacheUsageAsync(CancellationToken ct = default)
+        => _sp.GetRequiredService<CacheJanitor>().GetUsageAsync(ct);
+
+    public Task<CacheUsage> ClearPreviewsAsync(CancellationToken ct = default)
+        => _sp.GetRequiredService<CacheJanitor>().ClearPreviewsAsync(ct);
+
     // ── Desktop integration ──
+
+    public Result OpenLogsFolder() => OpenWithShell(_sp.GetRequiredService<AppFolders>().Logs);
+
+    /// <summary>
+    /// Opens a sidecar's source link in the browser. Sidecars are untrusted files, so only web links are
+    /// handed to the shell: a file: or custom-scheme URL could start a program.
+    /// </summary>
+    public Result OpenLink(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+            ? OpenWithShell(uri.AbsoluteUri)
+            : Result.Failure("Only web links can be opened.");
 
     /// <summary>
     /// Opens the original in the system's default app (xdg-open on Linux), or its folder in the file manager.
@@ -235,6 +281,11 @@ public sealed class GalleryService : IDisposable
         var target = showFolder ? Path.GetDirectoryName(path)! : path;
         if (!Path.Exists(target))
             return Result.Failure("The file is not available. Is the drive connected?");
+        return OpenWithShell(target);
+    }
+
+    private Result OpenWithShell(string target)
+    {
         try
         {
             using var _ = Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });

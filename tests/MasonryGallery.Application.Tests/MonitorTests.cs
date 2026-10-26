@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Reactive.Subjects;
 using FluentAssertions;
 using MasonryGallery.Application.Ports;
+using MasonryGallery.Application.Settings;
 using MasonryGallery.Application.UseCases;
 using MasonryGallery.Domain;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -155,6 +156,7 @@ public class LibraryMonitorTests
     private readonly ILibraryRepository _libraries = Substitute.For<ILibraryRepository>();
     private readonly IFileEnumerator _files = Substitute.For<IFileEnumerator>();
     private readonly FakeWatchers _watchers = new();
+    private readonly ISettingsStore _settings = Substitute.For<ISettingsStore>();
     private readonly ScanScheduler _scheduler;
     private readonly LibraryMonitor _monitor;
     private Library _library = new("Photos", "/photos") { Id = A };
@@ -187,7 +189,7 @@ public class LibraryMonitorTests
         _files.RootExists("/photos").Returns(true);
         _scheduler = new ScanScheduler(_scanner, _clock, NullLogger<ScanScheduler>.Instance);
         _monitor = new LibraryMonitor(_libraries, _watchers, _files, _scheduler, _clock,
-            NullLogger<LibraryMonitor>.Instance, Options);
+            NullLogger<LibraryMonitor>.Instance, Options, _settings);
     }
 
     private async Task StartAsync()
@@ -209,6 +211,21 @@ public class LibraryMonitorTests
         _scanner.Calls.Should().Equal("full:1");
         _watchers.Started.Should().ContainSingle();
         _monitor.Statuses.Should().ContainKey(A).WhoseValue.Mode.Should().Be(WatchMode.Live);
+    }
+
+    [Fact]
+    public async Task Changed_ignore_patterns_rescan_every_library()
+    {
+        await StartAsync();
+        var before = new AppSettings();
+
+        _settings.Changed += Raise.Event<Action<AppSettings, AppSettings>>(before, before with { ThumbnailQuality = 90 });
+        await _scheduler.WhenIdleAsync();
+        _scanner.Calls.Should().BeEmpty("only ignore patterns change what is indexed");
+
+        _settings.Changed += Raise.Event<Action<AppSettings, AppSettings>>(before, before with { IgnorePatterns = ["Raw"] });
+        await _scheduler.WhenIdleAsync();
+        _scanner.Calls.Should().Equal("full:1");
     }
 
     [Fact]

@@ -41,7 +41,7 @@ public sealed class MediaServer : IAsyncDisposable
     }
 
     public static async Task<MediaServer> StartAsync(
-        SqliteConnectionFactory db, ShardedThumbnailStore thumbs, IThumbnailGenerator generator)
+        SqliteConnectionFactory db, ShardedThumbnailStore thumbs, IThumbnailGenerator generator, ISettingsStore settings)
     {
         var token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         var expected = System.Text.Encoding.ASCII.GetBytes(token);
@@ -74,7 +74,7 @@ public sealed class MediaServer : IAsyncDisposable
             var path = thumbs.GetPath(id, medium ? ThumbnailFormat.Medium : ThumbnailFormat.Small);
             // Medium previews are made on first open (design §6); small ones come from the ingest pipeline.
             if (medium && !File.Exists(path))
-                await TryGenerateMediumAsync(id, db, thumbs, generator, ctx.RequestAborted);
+                await TryGenerateMediumAsync(id, db, thumbs, generator, settings.Current.ThumbnailQuality, ctx.RequestAborted);
 
             var file = new FileInfo(path);
             // Not generated yet: the tile keeps its placeholder until the next refresh.
@@ -143,13 +143,13 @@ public sealed class MediaServer : IAsyncDisposable
     }
 
     private static async Task TryGenerateMediumAsync(
-        int id, SqliteConnectionFactory db, ShardedThumbnailStore thumbs, IThumbnailGenerator generator, CancellationToken ct)
+        int id, SqliteConnectionFactory db, ShardedThumbnailStore thumbs, IThumbnailGenerator generator, int quality, CancellationToken ct)
     {
         var (source, _) = await ResolveSourceAsync(id, db);
         if (source is null)
             return;
 
-        var job = new ThumbnailJob(id, source.Path, source.Kind, ThumbnailFormat.Version, source.DurationMs);
+        var job = new ThumbnailJob(id, source.Path, source.Kind, ThumbnailFormat.Version, source.DurationMs, quality);
         var result = await generator.GenerateMediumAsync(job, ct);
         if (result.IsSuccess)
             await thumbs.SaveAsync(id, ThumbnailFormat.Medium, result.Value!.Webp, ct);

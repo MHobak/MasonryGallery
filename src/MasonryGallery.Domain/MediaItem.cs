@@ -25,6 +25,10 @@ public sealed class MediaItem
     public int ScanId { get; set; }
     public DateTime? DeletedAt { get; set; }
     public bool Favorite { get; set; }
+    /// <summary>XMP sidecar next to the file (relative to the library root), when there is one.</summary>
+    public string? SidecarPath { get; set; }
+    /// <summary>When the sidecar was last read; a newer file on disk means it is read again.</summary>
+    public DateTime? SidecarModifiedUtc { get; set; }
 
     private List<Tag>? _tags;
     public IReadOnlyList<Tag> Tags => _tags ??= new List<Tag>();

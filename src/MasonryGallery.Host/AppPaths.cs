@@ -23,6 +23,10 @@ internal static class AppPaths
     public static string Database => Path.Combine(Data, "gallery.db");
     public static string Thumbnails => Path.Combine(Cache, "thumbs");
     public static string Logs => Path.Combine(Data, "logs");
+    public static string InstanceLock => Path.Combine(Data, "gallery.lock");
+    public static string UserSettings => Path.Combine(Data, "settings.json");
+    /// <summary>Shipped defaults, next to the executable.</summary>
+    public static string DefaultSettings => Path.Combine(AppContext.BaseDirectory, "appsettings.json");
 
     // Earlier builds kept the DB and thumbnails together in ~/.config/MasonryGallery (%APPDATA% on Windows).
     private static string Legacy { get; } = Path.Combine(

@@ -21,29 +21,60 @@ dotnet run --project src/MasonryGallery.Host
    After that the gallery **keeps itself current**: files you add, change, move or delete show up within a few seconds, and every library is fully re-checked every 15 minutes. **Rescan** in the library panel forces a full check.
    If a library's folder is missing or empty (unplugged drive, unmounted share), it is marked **Offline** and its items are kept; when the folder comes back, the library is picked up again within a minute.
 3. **Browse.** Scroll the grid. Newest items come first; items on screen get their thumbnails first.
-4. **Filter.** Type in the search box to match file and folder names (word prefixes: `bea` finds `beach.jpg`). Use **All / Photos / Videos** and the heart for favorites. **Filters** adds sort order, library, tag and a date range.
+4. **Filter.** Type in the search box to match file and folder names (word prefixes: `bea` finds `beach.jpg`). Use **All / Photos / Videos** and the heart for favorites. **Filters** adds tags, sort order (newest, oldest, recently added, name or **Random**, with **Shuffle** for a new order), library and a date range. Every sort works together with the other filters.
+   In the tag box, type part of a tag and pick a suggestion (most used first). Several tags narrow the results (items must have all of them); start with `-` to exclude a tag (`-night`). Click a chip to switch between "has" and "not", **Backspace** in the empty box removes the last one.
 5. **Open an item.** Click it (or focus it and press `Enter`). In the viewer:
 
    | Key | Action |
    |---|---|
    | `←` / `→` | Previous / next |
    | `F` | Favorite |
-   | `I` | Details and tags (type a tag, press `Enter`) |
+   | `I` | Details and tags (type a tag, press `Enter`; click any tag to filter by it) |
+   | `P` or `F11` | Presentation: full screen, media scaled to fill the screen without cropping |
+   | `A` | Autoplay on / off (starts presentation if needed) |
+   | `Space` or `K` | Play / pause a video |
+   | `J` / `L` or `Shift`+`←` / `→` | Video 5 seconds back / forward |
+   | `R` | Loop the video on / off |
    | `+` / `-` / `0` | Zoom in / out / reset (or mouse wheel, double-click; drag to pan) |
    | `O` | Open in the default app |
-   | `Esc` | Close |
+   | `Esc` | Leave presentation, then close |
 
    Videos the app can't play get an **Open in default player** button.
+
+   **Presentation** also starts with `P` on a focused tile. The ▷ button in the top bar starts a **slideshow**: presentation with autoplay on, from the first item, so it follows the current filters and sort (random included). Arrow keys and the on-screen arrows move through the items; the controls and pointer hide when the mouse is still.
+
+   **Autoplay** shows each image for the time set in **Settings → Presentation** (5 seconds by default; a thin bar shows the countdown) and lets each video play to its end, then moves on, starting over after the last item. Pausing autoplay (`A` or its button) keeps the current item on screen; the arrows still work and restart the countdown.
+
+   **Looping:** videos loop in the normal viewer. In presentation they play through so autoplay can move on, unless you turn loop on there with `R` or the loop button.
 6. **Manage libraries.** In the folder panel you can hide a library, follow symbolic links, or remove it (this forgets its tags and favorites; your files are never touched). Files that couldn't be read are listed under **Problems**.
+7. **More windows.** Press `Ctrl+N` (or the two-squares button) to open another window on the same gallery, with its own library, filters, sort and slideshow. Starting the app again while it runs does the same. Extra windows are marked **Viewer**: they browse, present and edit favorites and tags, and pick up new files within seconds, but scanning, libraries and settings are handled by the first window. If the first window is closed, viewers keep working; nothing is indexed until the app is started again.
+8. **Settings** (gear icon):
+   - **Worker threads / video processes:** how hard indexing works. *Automatic* suits most machines and uses fewer threads on spinning or network drives.
+   - **Thumbnail quality:** applies to thumbnails made from then on.
+   - **Preview cache limit:** caps the large lightbox previews, removing the least recently viewed (checked hourly). Grid thumbnails are always kept.
+   - **Ignore:** file or folder names to skip, with `*` and `?` wildcards, such as `Screenshots` or `*_edited.jpg`. Saving rescans every library.
+   - **FFmpeg folder:** use your own ffmpeg build (after a restart).
+   - **Open logs folder:** for bug reports.
 
 Supported files: jpg, jpeg, png, webp, gif, bmp, avif, mp4, mkv, webm, mov, avi, m4v.
+
+**XMP sidecars.** A `photo.jpg.xmp` (digiKam, darktable, gallery-dl, ExifTool) or `photo.xmp` (Lightroom) next to a file is read with it:
+
+- **Tags:** `dc:subject` keywords. Categories come from hierarchical keywords (`lr:hierarchicalSubject`, `digiKam:TagsList`), so `Artist|jane` shows `jane` under **Artist**.
+- **Details:** creator, source link, title, description and rating.
+- **Date:** the capture date, used when the file has no EXIF date.
+
+Sidecar tags show read-only in the viewer (edit the sidecar to change them). Your own tags are kept separately and survive sidecar changes. Editing, adding or deleting a sidecar is picked up like any other file change; the thumbnail is not remade.
 
 ## Where data lives
 
 | | Linux | Windows |
 |---|---|---|
 | Index (`gallery.db`) and logs | `$XDG_DATA_HOME/MasonryGallery` (default `~/.local/share/MasonryGallery`) | `%APPDATA%\MasonryGallery` |
+| Your settings (`settings.json`) | same folder | same folder |
 | Thumbnails (cache) | `$XDG_CACHE_HOME/MasonryGallery` (default `~/.cache/MasonryGallery`) | `%LOCALAPPDATA%\MasonryGallery\cache` |
+
+`settings.json` holds only what you changed; the shipped defaults are in `appsettings.json` next to the program. Only the first window indexes; later launches open viewer windows (see step 7).
 
 The thumbnail cache is safe to delete; thumbnails are regenerated on the next start. Deleting the index resets the gallery. Your media is never modified. Data from older builds in `~/.config/MasonryGallery` is moved over on first start.
 
@@ -58,7 +89,7 @@ Layout: `Domain` (models) → `Application` (scan pipeline, use cases) → `Infr
 
 ## Known limits
 
-Search matches word prefixes, not arbitrary substrings. Thumbnail, cache and worker settings are not configurable yet. Nothing yet prevents two instances from opening the same index.
+Search matches word prefixes, not arbitrary substrings. Grid thumbnail size is fixed at 320 px.
 
 Network folders, and libraries with more subfolders than Linux lets one user watch, aren't watched live; the library panel says so, and their changes show up within 5 minutes instead. To watch large libraries live, raise the limit:
 

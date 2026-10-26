@@ -1,0 +1,141 @@
+@implements IDisposable
+@inject GalleryService Gallery
+
+<div class="tag-filter" role="group" aria-label="Filter by tags">
+    @foreach (var tag in Included)
+    {
+        <span class="tag-chip on">
+            <button type="button" class="name" title="Click to exclude instead" @onclick="() => FlipAsync(tag)">@tag</button>
+            <button type="button" aria-label="Stop filtering by @tag" @onclick="() => RemoveAsync(tag)">×</button>
+        </span>
+    }
+    @foreach (var tag in Excluded)
+    {
+        <span class="tag-chip off">
+            <button type="button" class="name" title="Click to require instead" @onclick="() => FlipAsync(tag)">not @tag</button>
+            <button type="button" aria-label="Stop excluding @tag" @onclick="() => RemoveAsync(tag)">×</button>
+        </span>
+    }
+    <div class="tag-search">
+        <input type="text" role="combobox" aria-label="Filter by tag" aria-autocomplete="list" aria-controls="tag-suggestions"
+               aria-expanded="@Bool(ShowList)" aria-activedescendant="@(ShowList && _active >= 0 ? $"tag-opt-{_active}" : null)"
+               placeholder="@(Included.Count + Excluded.Count == 0 ? "Filter by tag (-tag excludes)" : "Add a tag")"
+               spellcheck="false" autocomplete="off"
+               value="@_text" @oninput="OnInputAsync" @onkeydown="OnKeyAsync" @onfocusout="() => _open = false" />
+        @if (ShowList)
+        {
+            <ul id="tag-suggestions" role="listbox" class="tag-suggestions">
+                @for (var i = 0; i < _suggestions.Count; i++)
+                {
+                    var s = _suggestions[i];
+                    var index = i;
+                    @* mousedown, not click: the input's focusout would close the list before a click lands. *@
+                    <li id="tag-opt-@i" role="option" aria-selected="@Bool(i == _active)" class="@(i == _active ? "active" : null)"
+                        @onmousedown="() => PickAsync(s.Name)" @onmousedown:preventDefault="true" @onmouseenter="() => _active = index">
+                        <span class="name">@s.Name</span>
+                        @if (s.Category is not null)
+                        {
+                            <small class="category">@s.Category</small>
+                        }
+                        <small class="count">@s.Count.ToString("N0")</small>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<string> Included { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> Excluded { get; set; } = [];
+    /// <summary>The new required and excluded tags.</summary>
+    [Parameter] public EventCallback<(IReadOnlyList<string> Included, IReadOnlyList<string> Excluded)> OnChanged { get; set; }
+
+    private const int SuggestionCount = 12;
+    private string _text = "";
+    private IReadOnlyList<TagCount> _suggestions = [];
+    private int _active = -1;
+    private bool _open;
+    private CancellationTokenSource? _typing;
+
+    private bool ShowList => _open && _suggestions.Count > 0;
+    private bool Excluding => _text.StartsWith('-');
+    private string Query => _text.TrimStart('-').Trim();
+
+    private async Task OnInputAsync(ChangeEventArgs e)
+    {
+        _text = (string?)e.Value ?? "";
+        _open = true;
+        _active = -1;
+        _typing?.Cancel();
+        var typing = _typing = new CancellationTokenSource();
+        try
+        {
+            // Wait for a pause in typing; counting tag uses for every keystroke would lag on big libraries.
+            await Task.Delay(120, typing.Token);
+            var found = await Gallery.SearchTagsAsync(Query, SuggestionCount + Included.Count + Excluded.Count, typing.Token);
+            if (typing.IsCancellationRequested) return;
+            _suggestions = found.Where(t => !IsActive(t.Name)).Take(SuggestionCount).ToList();
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task OnKeyAsync(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown" when _suggestions.Count > 0:
+                _open = true;
+                _active = (_active + 1) % _suggestions.Count;
+                break;
+            case "ArrowUp" when _suggestions.Count > 0:
+                _open = true;
+                _active = _active <= 0 ? _suggestions.Count - 1 : _active - 1;
+                break;
+            case "Enter" or "Tab" when ShowList && _active >= 0:
+                await PickAsync(_suggestions[_active].Name);
+                break;
+            case "Enter" when Query.Length > 0:
+                await PickAsync(Query); // a tag typed in full; unknown names simply match nothing
+                break;
+            case "Escape" when ShowList:
+                _open = false;
+                break;
+            case "Escape":
+                _text = "";
+                break;
+            case "Backspace" when _text.Length == 0 && (Excluded.Count > 0 || Included.Count > 0):
+                await RemoveAsync(Excluded.Count > 0 ? Excluded[^1] : Included[^1]);
+                break;
+        }
+    }
+
+    private async Task PickAsync(string tag)
+    {
+        var exclude = Excluding;
+        _text = "";
+        _suggestions = [];
+        _active = -1;
+        _open = false;
+        if (IsActive(tag)) return;
+        await OnChanged.InvokeAsync(exclude
+            ? (Included, [.. Excluded, tag])
+            : ([.. Included, tag], Excluded));
+    }
+
+    private Task RemoveAsync(string tag)
+        => OnChanged.InvokeAsync((Without(Included, tag), Without(Excluded, tag)));
+
+    private Task FlipAsync(string tag)
+        => Included.Contains(tag)
+            ? OnChanged.InvokeAsync((Without(Included, tag), [.. Excluded, tag]))
+            : OnChanged.InvokeAsync(([.. Included, tag], Without(Excluded, tag)));
+
+    private bool IsActive(string tag)
+        => Included.Contains(tag, StringComparer.OrdinalIgnoreCase) || Excluded.Contains(tag, StringComparer.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<string> Without(IReadOnlyList<string> tags, string tag)
+        => tags.Where(t => !string.Equals(t, tag, StringComparison.OrdinalIgnoreCase)).ToList();
+
+    public void Dispose() => _typing?.Cancel();
+}

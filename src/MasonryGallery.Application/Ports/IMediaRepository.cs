@@ -25,6 +25,18 @@ public interface IMediaRepository
     Task SetFavoriteAsync(int mediaId, bool favorite, CancellationToken ct = default);
     /// <summary>Tags in use on live media, with how many items carry each, by name.</summary>
     Task<IReadOnlyList<TagCount>> ListTagsAsync(CancellationToken ct = default);
+    /// <summary>
+    /// Tags whose name starts with <paramref name="prefix"/> (any case) or contains it after a word break ("_hair"
+    /// style names), most used first. For autocomplete; counts include every library.
+    /// </summary>
+    Task<IReadOnlyList<TagCount>> SearchTagsAsync(string prefix, int limit, CancellationToken ct = default);
+    /// <summary>
+    /// Replaces the sidecar-derived tags and details of the given paths; null data clears them (sidecar gone or
+    /// unreadable). Tags the user added in the app are kept.
+    /// </summary>
+    Task SaveSidecarsAsync(int libraryId, IReadOnlyList<(string RelPath, SidecarData? Data)> sidecars, CancellationToken ct = default);
+    /// <summary>Creator, source and the other sidecar details of one item (its tags come from <see cref="GetTagsForMediaAsync"/>).</summary>
+    Task<SidecarData?> GetSidecarAsync(int mediaId, CancellationToken ct = default);
     /// <summary>Live items whose probe or thumbnail failed, newest first.</summary>
     Task<IReadOnlyList<FailedItem>> GetFailedAsync(int limit, CancellationToken ct = default);
     Task<int> CountFailedAsync(CancellationToken ct = default);
@@ -63,7 +75,8 @@ public interface IMediaRepository
     Task<ReadOnlyCollection<MediaItem>> GetChangedSinceAsync(int libraryId, DateTime since, CancellationToken ct = default);
 }
 
-public record ScanState(long SizeBytes, DateTime ModifiedUtc, ProbeState ProbeState);
+/// <param name="SidecarModifiedUtc">When the sidecar that was last read was written; null when there was none.</param>
+public record ScanState(long SizeBytes, DateTime ModifiedUtc, ProbeState ProbeState, DateTime? SidecarModifiedUtc = null);
 
 public record LibraryItem(int Id, int Width, int Height, MediaKind Kind, bool ThumbReady, byte[]? Placeholder, bool Favorite = false);
 
@@ -72,21 +85,27 @@ public enum MediaSort
     NewestFirst,
     OldestFirst,
     RecentlyAdded,
-    Name
+    Name,
+    /// <summary>Shuffled by <see cref="MediaFilter.Seed"/>: the same seed keeps the same order across refreshes.</summary>
+    Random
 }
 
 /// <summary>What the gallery shows. Null members don't filter; dates are inclusive bounds on DateTaken (UTC).</summary>
+/// <param name="Tags">Items must carry every one of these tags.</param>
+/// <param name="ExcludedTags">Items must carry none of these tags.</param>
 public sealed record MediaFilter(
     LibraryId? LibraryId = null,
     MediaKind? Kind = null,
     string? Search = null,
-    string? Tag = null,
+    IReadOnlyList<string>? Tags = null,
+    IReadOnlyList<string>? ExcludedTags = null,
     DateTime? From = null,
     DateTime? To = null,
     bool FavoritesOnly = false,
-    MediaSort Sort = MediaSort.NewestFirst);
+    MediaSort Sort = MediaSort.NewestFirst,
+    int Seed = 0);
 
-public record TagCount(string Name, int Count);
+public record TagCount(string Name, int Count, string? Category = null);
 
 /// <param name="Stage">"probe" (unreadable file) or "thumbnail".</param>
 public record FailedItem(int Id, string FileName, string RelPath, string LibraryName, string Stage);

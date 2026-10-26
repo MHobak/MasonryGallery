@@ -25,10 +25,10 @@ public sealed class SqliteMediaRepository : IMediaRepository
     private const string UpsertSql = @"
         INSERT INTO Media (LibraryId, RelPath, FileName, Kind, SizeBytes, ModifiedUtc,
                            DateTaken, DateAdded, Width, Height, DurationMs, Playable,
-                           ProbeState, ThumbState, ThumbVersion, ScanId, Favorite)
+                           ProbeState, ThumbState, ThumbVersion, ScanId, Favorite, SidecarPath, SidecarModifiedUtc)
         VALUES (@LibraryId, @RelPath, @FileName, @Kind, @SizeBytes, @ModifiedUtc,
                 @DateTaken, @DateAdded, @Width, @Height, @DurationMs, @Playable,
-                @ProbeState, @ThumbState, @ThumbVersion, @ScanId, @Favorite)
+                @ProbeState, @ThumbState, @ThumbVersion, @ScanId, @Favorite, @SidecarPath, @SidecarModifiedUtc)
         ON CONFLICT(LibraryId, RelPath) DO UPDATE SET
             FileName = excluded.FileName,
             Kind = excluded.Kind,
@@ -42,6 +42,9 @@ public sealed class SqliteMediaRepository : IMediaRepository
                               THEN excluded.ProbeState ELSE MAX(excluded.ProbeState, Media.ProbeState) END,
             ThumbState = CASE WHEN Media.ModifiedUtc != excluded.ModifiedUtc OR Media.SizeBytes != excluded.SizeBytes
                               THEN 0 ELSE Media.ThumbState END,
+            -- Only a probe (which reads the sidecar) records the sidecar as read; a crash before that re-reads it.
+            SidecarPath = CASE WHEN excluded.ProbeState != 0 THEN excluded.SidecarPath ELSE Media.SidecarPath END,
+            SidecarModifiedUtc = CASE WHEN excluded.ProbeState != 0 THEN excluded.SidecarModifiedUtc ELSE Media.SidecarModifiedUtc END,
             ScanId = excluded.ScanId,
             SizeBytes = excluded.SizeBytes,
             ModifiedUtc = excluded.ModifiedUtc,
@@ -102,11 +105,7 @@ public sealed class SqliteMediaRepository : IMediaRepository
             args.Add("Tag", tag);
         }
 
-        if (ToFtsQuery(search) is { } match)
-        {
-            sql.Append(" AND m.Id IN (SELECT rowid FROM MediaFts WHERE MediaFts MATCH @Search)");
-            args.Add("Search", match);
-        }
+        AppendSearch(sql, args, search);
 
         if (lastDateTaken.HasValue && lastId.HasValue)
         {
@@ -127,12 +126,28 @@ public sealed class SqliteMediaRepository : IMediaRepository
     }
 
     // User text becomes quoted prefix terms ("cat"* "beach"*), so FTS operators and stray quotes can't cause syntax errors.
-    private static string? ToFtsQuery(string? search)
+    /// <summary>
+    /// Every search term must match, anywhere in the relative path (folders and file name, any case).
+    /// Terms of 3+ characters use the trigram index, so "kpop" finds "IdiotsKPOP/…"; shorter ones (two-syllable
+    /// Korean names, say) can't be trigram-matched and fall back to matching the start of a word.
+    /// </summary>
+    private static void AppendSearch(StringBuilder sql, DynamicParameters args, string? search)
     {
         var terms = (search ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        return terms.Length == 0
-            ? null
-            : string.Join(' ', terms.Select(t => "\"" + t.Replace("\"", "\"\"") + "\"*"));
+        for (var i = 0; i < terms.Length; i++)
+        {
+            var quoted = "\"" + terms[i].Replace("\"", "\"\"") + "\"";
+            if (terms[i].EnumerateRunes().Count() >= 3)
+            {
+                sql.Append($" AND m.Id IN (SELECT rowid FROM MediaPathFts WHERE MediaPathFts MATCH @Search{i})");
+                args.Add($"Search{i}", quoted);
+            }
+            else
+            {
+                sql.Append($" AND m.Id IN (SELECT rowid FROM MediaFts WHERE MediaFts MATCH @Search{i})");
+                args.Add($"Search{i}", quoted + "*");
+            }
+        }
     }
 
     public async Task<MediaItem?> GetByIdAsync(int id, CancellationToken ct = default)
@@ -174,15 +189,17 @@ public sealed class SqliteMediaRepository : IMediaRepository
             sql.Append(" AND m.Kind = @Kind");
             args.Add("Kind", (int)kind);
         }
-        if (ToFtsQuery(filter.Search) is { } match)
+        AppendSearch(sql, args, filter.Search);
+        // One indexed lookup per tag (IX_MediaTag_Tag); Tag.Name compares without case.
+        foreach (var (tag, i) in (filter.Tags ?? []).Select((t, i) => (t.Trim(), i)))
         {
-            sql.Append(" AND m.Id IN (SELECT rowid FROM MediaFts WHERE MediaFts MATCH @Search)");
-            args.Add("Search", match);
+            sql.Append($" AND m.Id IN (SELECT MediaId FROM MediaTag WHERE TagId = (SELECT Id FROM Tag WHERE Name = @Tag{i}))");
+            args.Add($"Tag{i}", tag);
         }
-        if (!string.IsNullOrWhiteSpace(filter.Tag))
+        foreach (var (tag, i) in (filter.ExcludedTags ?? []).Select((t, i) => (t.Trim(), i)))
         {
-            sql.Append(" AND m.Id IN (SELECT mt.MediaId FROM MediaTag mt JOIN Tag t ON t.Id = mt.TagId WHERE t.Name = @Tag)");
-            args.Add("Tag", filter.Tag.Trim());
+            sql.Append($" AND m.Id NOT IN (SELECT MediaId FROM MediaTag WHERE TagId = (SELECT Id FROM Tag WHERE Name = @NotTag{i}))");
+            args.Add($"NotTag{i}", tag);
         }
         if (filter.From is { } from)
         {
@@ -202,15 +219,29 @@ public sealed class SqliteMediaRepository : IMediaRepository
             MediaSort.OldestFirst => " ORDER BY m.DateTaken ASC, m.Id ASC",
             MediaSort.RecentlyAdded => " ORDER BY m.DateAdded DESC, m.Id DESC",
             MediaSort.Name => " ORDER BY m.FileName COLLATE NOCASE ASC, m.Id ASC",
+            MediaSort.Random => "", // ordered below
             _ => " ORDER BY m.DateTaken DESC, m.Id DESC",
         });
 
         var rows = await conn.QueryAsync<(long Id, long? Width, long? Height, long Kind, long ThumbState, byte[]? Placeholder, long Favorite)>(
             sql.ToString(), args);
         // Unprobed items have no size yet; 1:1 keeps them in the grid until the probe reports in.
-        return rows.Select(r => new LibraryItem((int)r.Id, (int)(r.Width ?? 1), (int)(r.Height ?? 1), (MediaKind)r.Kind,
-                r.ThumbState == (int)ThumbState.Done, r.Placeholder, r.Favorite != 0))
-            .ToList();
+        var items = rows.Select(r => new LibraryItem((int)r.Id, (int)(r.Width ?? 1), (int)(r.Height ?? 1), (MediaKind)r.Kind,
+            r.ThumbState == (int)ThumbState.Done, r.Placeholder, r.Favorite != 0));
+        // Each item's place is a hash of its ID and the seed, not a shuffle of the list: refreshes during a scan
+        // keep the order, and new items land at random spots instead of reshuffling everything.
+        if (filter.Sort == MediaSort.Random)
+            items = items.OrderBy(i => ShufflePosition(i.Id, filter.Seed)).ThenBy(i => i.Id);
+        return items.ToList();
+    }
+
+    // SplitMix64 finalizer: consecutive IDs (files of one folder) end up far apart.
+    internal static ulong ShufflePosition(int id, int seed)
+    {
+        var z = ((ulong)(uint)seed << 32 | (uint)id) + 0x9E3779B97F4A7C15UL;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+        return z ^ (z >> 31);
     }
 
     public async Task<IReadOnlyDictionary<int, string>> GetFileNamesAsync(IReadOnlyList<int> ids, CancellationToken ct = default)
@@ -234,14 +265,108 @@ public sealed class SqliteMediaRepository : IMediaRepository
     public async Task<IReadOnlyList<TagCount>> ListTagsAsync(CancellationToken ct = default)
     {
         using var conn = _factory.CreateConnection();
-        var rows = await conn.QueryAsync<(string Name, long Count)>(
-            @"SELECT t.Name, COUNT(*) FROM Tag t
+        var rows = await conn.QueryAsync<(string Name, long Count, string? Category)>(
+            @"SELECT t.Name, COUNT(*), t.Category FROM Tag t
               JOIN MediaTag mt ON mt.TagId = t.Id
               JOIN Media m ON m.Id = mt.MediaId
               WHERE m.DeletedAt IS NULL
               GROUP BY t.Id
               ORDER BY t.Name COLLATE NOCASE");
-        return rows.Select(r => new TagCount(r.Name, (int)r.Count)).ToList();
+        return rows.Select(r => new TagCount(r.Name, (int)r.Count, r.Category)).ToList();
+    }
+
+    public async Task<IReadOnlyList<TagCount>> SearchTagsAsync(string prefix, int limit, CancellationToken ct = default)
+    {
+        using var conn = _factory.CreateConnection();
+        var escaped = prefix.Trim().Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
+        // Counted from MediaTag alone: joining Media for deleted rows would touch every tagged item per keystroke.
+        var rows = await conn.QueryAsync<(string Name, long Count, string? Category)>(
+            @"SELECT t.Name, COUNT(*) AS Uses, t.Category FROM Tag t
+              JOIN MediaTag mt ON mt.TagId = t.Id
+              WHERE t.Name LIKE @Prefix ESCAPE '\' OR t.Name LIKE @AfterUnderscore ESCAPE '\' OR t.Name LIKE @AfterSpace ESCAPE '\'
+              GROUP BY t.Id
+              ORDER BY t.Name LIKE @Prefix ESCAPE '\' DESC, Uses DESC, t.Name
+              LIMIT @Limit",
+            new { Prefix = escaped + "%", AfterUnderscore = @"%\_" + escaped + "%", AfterSpace = "% " + escaped + "%", Limit = limit });
+        return rows.Select(r => new TagCount(r.Name, (int)r.Count, r.Category)).ToList();
+    }
+
+    public async Task SaveSidecarsAsync(
+        int libraryId, IReadOnlyList<(string RelPath, SidecarData? Data)> sidecars, CancellationToken ct = default)
+    {
+        if (sidecars.Count == 0)
+            return;
+        using var conn = _factory.CreateConnection();
+        using var trans = conn.BeginTransaction();
+
+        var ids = (await conn.QueryAsync<(long Id, string RelPath)>(
+                "SELECT Id, RelPath FROM Media WHERE LibraryId = @LibraryId AND RelPath IN (SELECT value FROM json_each(@Paths))",
+                new { LibraryId = libraryId, Paths = JsonSerializer.Serialize(sidecars.Select(s => s.RelPath)) }, trans))
+            .ToDictionary(r => r.RelPath, r => r.Id, StringComparer.Ordinal);
+        var idsJson = JsonSerializer.Serialize(ids.Values);
+
+        // Tags that may become unused once these items' sidecar tags are replaced.
+        var previous = (await conn.QueryAsync<long>(
+            "SELECT DISTINCT TagId FROM MediaTag WHERE Source = 1 AND MediaId IN (SELECT value FROM json_each(@Ids))",
+            new { Ids = idsJson }, trans)).ToList();
+        await conn.ExecuteAsync("DELETE FROM MediaTag WHERE Source = 1 AND MediaId IN (SELECT value FROM json_each(@Ids))",
+            new { Ids = idsJson }, trans);
+        await conn.ExecuteAsync("DELETE FROM Sidecar WHERE MediaId IN (SELECT value FROM json_each(@Ids))",
+            new { Ids = idsJson }, trans);
+
+        var present = sidecars.Where(s => s.Data is not null && ids.ContainsKey(s.RelPath)).ToList();
+        var tags = present.SelectMany(s => s.Data!.Tags)
+            .Where(t => Tag.TryCreate(t.Name).IsSuccess)
+            .GroupBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new { n = g.Key, c = g.Select(t => t.Category).FirstOrDefault(c => c is not null) })
+            .ToList();
+        if (tags.Count > 0)
+        {
+            // A category from any sidecar sticks; a sidecar without one doesn't erase it.
+            await conn.ExecuteAsync(
+                @"INSERT INTO Tag (Name, Category)
+                  SELECT json_extract(value, '$.n'), json_extract(value, '$.c') FROM json_each(@Tags) WHERE true
+                  ON CONFLICT(Name) DO UPDATE SET Category = COALESCE(excluded.Category, Tag.Category)",
+                new { Tags = JsonSerializer.Serialize(tags) }, trans);
+            var tagIds = (await conn.QueryAsync<(long Id, string Name)>(
+                    "SELECT Id, Name FROM Tag WHERE Name IN (SELECT value FROM json_each(@Names))",
+                    new { Names = JsonSerializer.Serialize(tags.Select(t => t.n)) }, trans))
+                .ToDictionary(r => r.Name, r => r.Id, StringComparer.OrdinalIgnoreCase);
+            var pairs = present.SelectMany(s => s.Data!.Tags
+                    .Where(t => tagIds.ContainsKey(t.Name))
+                    .Select(t => new[] { ids[s.RelPath], tagIds[t.Name] }))
+                .ToList();
+            // A tag the user already added by hand stays theirs (Source 0).
+            await conn.ExecuteAsync(
+                @"INSERT INTO MediaTag (MediaId, TagId, Source)
+                  SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), 1 FROM json_each(@Pairs) WHERE true
+                  ON CONFLICT DO NOTHING",
+                new { Pairs = JsonSerializer.Serialize(pairs) }, trans);
+        }
+
+        await conn.ExecuteAsync(
+            @"INSERT INTO Sidecar (MediaId, Creator, Source, Title, Description, Rating)
+              VALUES (@MediaId, @Creator, @Source, @Title, @Description, @Rating)",
+            present.Select(s => new
+            {
+                MediaId = ids[s.RelPath], s.Data!.Creator, s.Data.Source, s.Data.Title, s.Data.Description, s.Data.Rating
+            }), trans);
+
+        if (previous.Count > 0)
+            await conn.ExecuteAsync(
+                @"DELETE FROM Tag WHERE Id IN (SELECT value FROM json_each(@Ids))
+                  AND NOT EXISTS (SELECT 1 FROM MediaTag WHERE TagId = Tag.Id)",
+                new { Ids = JsonSerializer.Serialize(previous) }, trans);
+
+        await trans.CommitAsync();
+    }
+
+    public async Task<SidecarData?> GetSidecarAsync(int mediaId, CancellationToken ct = default)
+    {
+        using var conn = _factory.CreateConnection();
+        var row = await conn.QuerySingleOrDefaultAsync<(string? Creator, string? Source, string? Title, string? Description, long? Rating)?>(
+            "SELECT Creator, Source, Title, Description, Rating FROM Sidecar WHERE MediaId = @MediaId", new { MediaId = mediaId });
+        return row is { } r ? new SidecarData([], r.Creator, r.Source, r.Title, r.Description, (int?)r.Rating) : null;
     }
 
     private const string FailedWhere = "m.DeletedAt IS NULL AND (m.ProbeState = 2 OR m.ThumbState = 2)";
@@ -334,13 +459,14 @@ public sealed class SqliteMediaRepository : IMediaRepository
     {
         using var conn = _factory.CreateConnection();
         // One JSON parameter instead of thousands of bind variables.
-        var rows = await conn.QueryAsync<(string RelPath, long SizeBytes, long ModifiedUtc, int ProbeState)>(
-            @"SELECT RelPath, SizeBytes, ModifiedUtc, ProbeState FROM Media
+        var rows = await conn.QueryAsync<(string RelPath, long SizeBytes, long ModifiedUtc, int ProbeState, long? SidecarModifiedUtc)>(
+            @"SELECT RelPath, SizeBytes, ModifiedUtc, ProbeState, SidecarModifiedUtc FROM Media
               WHERE LibraryId = @LibraryId AND RelPath IN (SELECT value FROM json_each(@Paths))",
             new { LibraryId = libraryId, Paths = JsonSerializer.Serialize(relPaths) });
         return rows.ToDictionary(
             r => r.RelPath,
-            r => new ScanState(r.SizeBytes, DateTimeOffset.FromUnixTimeMilliseconds(r.ModifiedUtc).UtcDateTime, (ProbeState)r.ProbeState),
+            r => new ScanState(r.SizeBytes, DateTimeOffset.FromUnixTimeMilliseconds(r.ModifiedUtc).UtcDateTime, (ProbeState)r.ProbeState,
+                r.SidecarModifiedUtc is { } sidecar ? DateTimeOffset.FromUnixTimeMilliseconds(sidecar).UtcDateTime : null),
             StringComparer.Ordinal);
     }
 
@@ -412,11 +538,12 @@ public sealed class SqliteMediaRepository : IMediaRepository
     public async Task<ReadOnlyCollection<Tag>> GetTagsForMediaAsync(int mediaId, CancellationToken ct = default)
     {
         using var conn = _factory.CreateConnection();
-        var sql = @"SELECT t.Name FROM Tag t
+        var sql = @"SELECT t.Name, t.Category, mt.Source FROM Tag t
                     JOIN MediaTag mt ON t.Id = mt.TagId
-                    WHERE mt.MediaId = @MediaId";
-        var names = (await conn.QueryAsync<string>(sql, new { MediaId = mediaId })).ToList();
-        return names.Select(n => new Tag(n)).ToList().AsReadOnly();
+                    WHERE mt.MediaId = @MediaId
+                    ORDER BY t.Name COLLATE NOCASE";
+        var rows = await conn.QueryAsync<(string Name, string? Category, long Source)>(sql, new { MediaId = mediaId });
+        return rows.Select(r => new Tag(r.Name) { Category = r.Category, FromSidecar = r.Source == 1 }).ToList().AsReadOnly();
     }
 
     public async Task SetTagsAsync(int mediaId, IEnumerable<string> tagNames, CancellationToken ct = default)
@@ -424,7 +551,8 @@ public sealed class SqliteMediaRepository : IMediaRepository
         using var conn = _factory.CreateConnection();
         using var trans = conn.BeginTransaction();
 
-        await conn.ExecuteAsync("DELETE FROM MediaTag WHERE MediaId = @MediaId", new { MediaId = mediaId }, trans);
+        // Only the user's own tags; the sidecar's are replaced when the sidecar changes.
+        await conn.ExecuteAsync("DELETE FROM MediaTag WHERE MediaId = @MediaId AND Source = 0", new { MediaId = mediaId }, trans);
 
         // Tag names are case-insensitive (Tag.Name COLLATE NOCASE); keep the first spelling of each.
         var names = tagNames.Select(n => n.Trim())

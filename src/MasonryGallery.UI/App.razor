@@ -1,6 +1,8 @@
 @implements IAsyncDisposable
 @inject GalleryService Gallery
 @inject IJSRuntime JS
+@inject AppMode Mode
+@inject WindowControl Window
 
 <div class="app">
     <header class="bar">
@@ -9,7 +11,7 @@
         <div class="tools">
             <label class="search">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-                <input type="search" placeholder="Search files" aria-label="Search files" value="@_filter.Search" @oninput="OnSearch" />
+                <input type="search" placeholder="Search names and folders" aria-label="Search file names and folders" value="@_filter.Search" @oninput="OnSearch" />
             </label>
 
             <div class="chips" role="group" aria-label="Filter by type">
@@ -27,22 +29,50 @@
             </button>
         </div>
 
+        <button type="button" class="icon-btn" aria-label="Start slideshow" title="Slideshow from the first item, autoplay on (P on a tile presents from there)"
+                disabled="@(_count == 0)" @onclick="StartSlideshow">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14l11-7z"/></svg>
+        </button>
+        @if (Window.OpenNewWindow is not null)
+        {
+            <button type="button" class="icon-btn" aria-label="New window" title="New window (Ctrl+N): another view with its own filters"
+                    @onclick="NewWindow">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="13" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/></svg>
+            </button>
+        }
+        @if (!Mode.IsViewer)
+        {
+        <button type="button" class="icon-btn" aria-label="Settings" title="Settings" @onclick="() => _settings = true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
         <button type="button" class="icon-btn" aria-label="Libraries" title="Libraries" @onclick="() => _panel = true">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         </button>
+        }
+        else
+        {
+            <span class="viewer-badge" title="Scanning, libraries and settings are managed in the main window">Viewer</span>
+        }
     </header>
 
-    @if (_filtersOpen)
+    @* Active tag filters keep the bar open: hiding them would leave a filtered grid with no visible reason. *@
+    @if (_filtersOpen || TagFilterCount > 0)
     {
         <div class="filter-bar" id="filter-bar">
+            <TagFilter Included="_filter.Tags ?? []" Excluded="_filter.ExcludedTags ?? []" OnChanged="OnTagFilterAsync" />
             <label>Sort
-                <select class="select" @onchange="e => ApplyAsync(_filter with { Sort = Enum.Parse<MediaSort>((string)e.Value!) })">
+                <select class="select" @onchange="e => SortAsync(Enum.Parse<MediaSort>((string)e.Value!))">
                     <option value="@MediaSort.NewestFirst" selected="@(_filter.Sort == MediaSort.NewestFirst)">Newest first</option>
                     <option value="@MediaSort.OldestFirst" selected="@(_filter.Sort == MediaSort.OldestFirst)">Oldest first</option>
                     <option value="@MediaSort.RecentlyAdded" selected="@(_filter.Sort == MediaSort.RecentlyAdded)">Recently added</option>
                     <option value="@MediaSort.Name" selected="@(_filter.Sort == MediaSort.Name)">Name</option>
+                    <option value="@MediaSort.Random" selected="@(_filter.Sort == MediaSort.Random)">Random</option>
                 </select>
             </label>
+            @if (_filter.Sort == MediaSort.Random)
+            {
+                <button type="button" class="btn" title="Shuffle again" @onclick="() => SortAsync(MediaSort.Random)">Shuffle</button>
+            }
             @if (_libraries.Count > 1)
             {
                 <label>Library
@@ -51,18 +81,6 @@
                         @foreach (var l in _libraries.Where(l => l.Enabled))
                         {
                             <option value="@l.Id.Value" selected="@(_filter.LibraryId == l.Id)">@l.Name</option>
-                        }
-                    </select>
-                </label>
-            }
-            @if (_tags.Count > 0 || _filter.Tag is not null)
-            {
-                <label>Tag
-                    <select class="select" @onchange="e => ApplyAsync(_filter with { Tag = (string)e.Value! is { Length: > 0 } t ? t : null })">
-                        <option value="" selected="@(_filter.Tag is null)">Any</option>
-                        @foreach (var t in _tags)
-                        {
-                            <option value="@t.Name" selected="@(string.Equals(_filter.Tag, t.Name, StringComparison.OrdinalIgnoreCase))">@t.Name (@t.Count)</option>
                         }
                     </select>
                 </label>
@@ -86,7 +104,14 @@
                 {
                     <h2>Your gallery is empty</h2>
                     <p>Add a folder with photos and videos to get started.</p>
-                    <button type="button" class="btn primary" @onclick="() => _panel = true">Add a library</button>
+                    @if (Mode.IsViewer)
+                    {
+                        <p class="hint">Add libraries in the main window.</p>
+                    }
+                    else
+                    {
+                        <button type="button" class="btn primary" @onclick="() => _panel = true">Add a library</button>
+                    }
                 }
                 else if (_filter != Unfiltered)
                 {
@@ -103,7 +128,10 @@
                 {
                     <h2>No photos or videos found</h2>
                     <p>Your libraries are empty, hidden or offline.</p>
-                    <button type="button" class="btn" @onclick="() => _panel = true">Open libraries</button>
+                    @if (!Mode.IsViewer)
+                    {
+                        <button type="button" class="btn" @onclick="() => _panel = true">Open libraries</button>
+                    }
                 }
             </div>
         }
@@ -122,31 +150,36 @@
             }
             @if (Offline > 0)
             {
-                <button type="button" class="warn" @onclick="() => _panel = true">@Offline @(Offline == 1 ? "library is" : "libraries are") offline</button>
+                <button type="button" class="warn" disabled="@Mode.IsViewer" @onclick="() => _panel = true">@Offline @(Offline == 1 ? "library is" : "libraries are") offline</button>
             }
             @if (Polled > 0)
             {
-                <button type="button" class="warn" title="Live watching isn't available; changes show up within a few minutes"
+                <button type="button" class="warn" disabled="@Mode.IsViewer" title="Live watching isn't available; changes show up within a few minutes"
                         @onclick="() => _panel = true">@Polled @(Polled == 1 ? "library isn't" : "libraries aren't") watched live</button>
             }
             @if (_failedCount > 0)
             {
-                <button type="button" class="warn" @onclick="() => _panel = true">@_failedCount.ToString("N0") @(_failedCount == 1 ? "file" : "files") couldn't be read</button>
+                <button type="button" class="warn" disabled="@Mode.IsViewer" @onclick="() => _panel = true">@_failedCount.ToString("N0") @(_failedCount == 1 ? "file" : "files") couldn't be read</button>
             }
-            <span class="count">@_count.ToString("N0") items</span>
+            <span class="count">@_count.ToString("N0") @(_count == 1 ? "item" : "items")</span>
         </footer>
     }
 
-    @if (_panel)
+    @if (_panel && !Mode.IsViewer)
     {
         <LibraryPanel Libraries="_libraries" WatchStatuses="Gallery.WatchStatuses" Busy="@Gallery.IsBusy" OnClose="() => _panel = false"
                       OnAdded="OnLibraryAdded" OnRescan="Gallery.RequestScan" OnChanged="OnLibrariesChangedAsync" />
     }
 
+    @if (_settings && !Mode.IsViewer)
+    {
+        <SettingsPanel OnClose="() => _settings = false" />
+    }
+
     @if (_open is { } id)
     {
-        <Lightbox Ids="_ids" CurrentId="id" Libraries="_libraries" AllTags="_tags"
-                  OnClose="CloseLightboxAsync" OnFavoriteChanged="OnFavoriteChangedAsync" OnTagsChanged="LoadTagsAsync" />
+        <Lightbox Ids="_ids" CurrentId="id" Libraries="_libraries" Present="_present" Autoplay="_autoplay"
+                  OnClose="CloseLightboxAsync" OnFavoriteChanged="OnFavoriteChangedAsync" OnTagClicked="FilterByTagAsync" />
     }
 </div>
 
@@ -159,14 +192,14 @@
     private IJSObjectReference? _view;
     private DotNetObjectReference<App>? _self;
     private IReadOnlyList<Library> _libraries = [];
-    private IReadOnlyList<TagCount> _tags = [];
     private MediaFilter _filter = Unfiltered;
     private DateOnly? _from, _to;
     private int[] _ids = [];
     private int _count, _failedCount;
-    private bool _loaded, _panel, _filtersOpen, _disposed;
+    private bool _loaded, _panel, _settings, _filtersOpen, _disposed;
     private bool _refreshing, _refreshPending, _pendingKeepPosition = true, _refreshQueued, _staleAfterLightbox;
     private int? _open;
+    private bool _present, _autoplay;
     private PipelineEvent? _status;
     private DateTime _lastRefresh;
     private CancellationTokenSource? _searchDelay, _failureDelay;
@@ -176,7 +209,9 @@
 
     private int ExtraFilterCount =>
         (_filter.Sort != MediaSort.NewestFirst ? 1 : 0) + (_filter.LibraryId is not null ? 1 : 0)
-        + (_filter.Tag is not null ? 1 : 0) + (_filter.From is not null ? 1 : 0) + (_filter.To is not null ? 1 : 0);
+        + TagFilterCount + (_filter.From is not null ? 1 : 0) + (_filter.To is not null ? 1 : 0);
+
+    private int TagFilterCount => (_filter.Tags?.Count ?? 0) + (_filter.ExcludedTags?.Count ?? 0);
 
     protected override void OnInitialized()
     {
@@ -197,7 +232,6 @@
         _view = await _module.InvokeAsync<IJSObjectReference>("create", _host, _self, Gallery.Endpoint.BaseUrl, Gallery.Endpoint.Token);
 
         _libraries = await Gallery.GetLibrariesAsync();
-        await LoadTagsAsync();
         _failedCount = await Gallery.CountFailedAsync();
         await RefreshAsync(keepPosition: false);
     }
@@ -313,7 +347,12 @@
             if (change.ReadyThumbnails.Length > 0 && _view is not null)
                 await _view.InvokeVoidAsync("markReady", change.ReadyThumbnails);
             if (change.ItemsChanged)
+            {
+                // A viewer hears about the main window's work only through the database; library status
+                // (offline, scanning) may have changed with it.
+                if (Mode.IsViewer) _libraries = await Gallery.GetLibrariesAsync();
                 await QueueRefreshAsync();
+            }
         });
     }
 
@@ -323,6 +362,10 @@
         _filter = filter;
         await RefreshAsync(keepPosition: false);
     }
+
+    // Random gets a fresh seed every time it's picked; the same seed keeps the order while the view refreshes.
+    private Task SortAsync(MediaSort sort)
+        => ApplyAsync(_filter with { Sort = sort, Seed = sort == MediaSort.Random ? Random.Shared.Next() : 0 });
 
     private Task OnLibrary(ChangeEventArgs e)
         => ApplyAsync(_filter with { LibraryId = int.TryParse(e.Value?.ToString(), out var v) ? new LibraryId(v) : null });
@@ -354,7 +397,25 @@
         catch (TaskCanceledException) { }
     }
 
-    private async Task LoadTagsAsync() => _tags = await Gallery.ListTagsAsync();
+    private Task OnTagFilterAsync((IReadOnlyList<string> Included, IReadOnlyList<string> Excluded) tags)
+        => ApplyAsync(_filter with
+        {
+            Tags = tags.Included.Count > 0 ? tags.Included : null,
+            ExcludedTags = tags.Excluded.Count > 0 ? tags.Excluded : null,
+        });
+
+    // A tag clicked in the viewer: show everything else that carries it.
+    private async Task FilterByTagAsync(string tag)
+    {
+        _open = null;
+        if (_filter.Tags?.Contains(tag, StringComparer.OrdinalIgnoreCase) == true)
+            return;
+        await ApplyAsync(_filter with
+        {
+            Tags = [.. _filter.Tags ?? [], tag],
+            ExcludedTags = _filter.ExcludedTags?.Where(t => !string.Equals(t, tag, StringComparison.OrdinalIgnoreCase)).ToList() is { Count: > 0 } rest ? rest : null,
+        });
+    }
 
     private async Task OnLibraryAdded(Library lib)
     {
@@ -367,7 +428,6 @@
         await Gallery.LibrariesChangedAsync();
         _libraries = await Gallery.GetLibrariesAsync();
         _failedCount = await Gallery.CountFailedAsync();
-        await LoadTagsAsync();
         if (_filter.LibraryId is { } selected && !_libraries.Any(l => l.Id == selected && l.Enabled))
             _filter = _filter with { LibraryId = null };
         await RefreshAsync(keepPosition: true);
@@ -384,7 +444,7 @@
     {
         _open = null;
         // Tag edits in the viewer can change what a tag filter matches.
-        if (_staleAfterLightbox || _filter.Tag is not null)
+        if (_staleAfterLightbox || TagFilterCount > 0)
         {
             _staleAfterLightbox = false;
             await RefreshAsync(keepPosition: true);
@@ -396,9 +456,31 @@
     public Task OpenMedia(int id)
     {
         _open = id;
+        _present = _autoplay = false;
         StateHasChanged();
         return Task.CompletedTask;
     }
+
+    /// <summary>Opens the viewer at <paramref name="id"/> in presentation mode; arrows move through the current order.</summary>
+    [JSInvokable]
+    public Task PresentMedia(int id)
+    {
+        _open = id;
+        _present = true;
+        _autoplay = false;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    // Presentation with autoplay, through the current filters and sort (Random makes it a shuffled slideshow).
+    private void StartSlideshow()
+    {
+        _open = _ids[0];
+        _present = _autoplay = true;
+    }
+
+    [JSInvokable]
+    public void NewWindow() => Window.OpenNewWindow?.Invoke();
 
     [JSInvokable]
     public void OnViewport(int[] ids) => Gallery.SetViewport(ids);

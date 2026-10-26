@@ -1,60 +1,30 @@
 namespace MasonryGallery.Infrastructure.Video;
 
-using Microsoft.Extensions.Logging;
-
+/// <summary>Finds ffmpeg and ffprobe (design §11). Returns null when a tool is nowhere to be found.</summary>
 public static class FfmpegLocator
 {
-    public static string? Locate()
+    public static string? Locate(string? configuredFolder = null) => Find("ffmpeg", configuredFolder);
+
+    public static string? LocateProbe(string? configuredFolder = null) => Find("ffprobe", configuredFolder);
+
+    // A folder the user chose wins over the copy bundled with the app, which wins over PATH.
+    private static string? Find(string tool, string? configuredFolder)
     {
-        // 1. Check bundled copy
-        var bundledDir = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg");
-        if (OperatingSystem.IsWindows())
+        var exe = OperatingSystem.IsWindows() ? tool + ".exe" : tool;
+        foreach (var dir in new[] { configuredFolder, Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg") })
         {
-            var bundled = Path.Combine(bundledDir, "ffmpeg.exe");
-            if (File.Exists(bundled))
-                return bundled;
+            if (dir is not null && File.Exists(Path.Combine(dir, exe)))
+                return Path.Combine(dir, exe);
         }
-        else
-        {
-            var bundled = Path.Combine(bundledDir, "ffmpeg");
-            if (File.Exists(bundled))
-                return bundled;
-        }
-
-        // 2. Check configured path (from settings) - would be injected via options
-        // For now, skip
-
-        // 3. Check PATH
-        return FindInPath("ffmpeg");
+        return FindInPath(exe);
     }
 
-    public static string? LocateProbe()
-    {
-        var bundledDir = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg");
-        if (OperatingSystem.IsWindows())
-        {
-            var bundled = Path.Combine(bundledDir, "ffprobe.exe");
-            if (File.Exists(bundled))
-                return bundled;
-        }
-        else
-        {
-            var bundled = Path.Combine(bundledDir, "ffprobe");
-            if (File.Exists(bundled))
-                return bundled;
-        }
-
-        return FindInPath("ffprobe");
-    }
-
-    private static string? FindInPath(string name)
+    private static string? FindInPath(string exe)
     {
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
-            var path = Path.Combine(dir, name);
-            if (OperatingSystem.IsWindows())
-                path += ".exe";
+            var path = Path.Combine(dir, exe);
             if (File.Exists(path))
                 return path;
         }

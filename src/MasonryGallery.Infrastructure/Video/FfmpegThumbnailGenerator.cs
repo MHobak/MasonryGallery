@@ -41,7 +41,7 @@ public sealed class FfmpegThumbnailGenerator
             using var bitmap = SKBitmap.Decode(frame.Value!);
             if (bitmap == null)
                 return Result<ThumbnailImage>.Failure("Cannot decode ffmpeg frame");
-            return ThumbnailEncoder.Encode(bitmap, SKEncodedOrigin.TopLeft, size);
+            return ThumbnailEncoder.Encode(bitmap, SKEncodedOrigin.TopLeft, size, job.Quality);
         }
         catch (OperationCanceledException)
         {

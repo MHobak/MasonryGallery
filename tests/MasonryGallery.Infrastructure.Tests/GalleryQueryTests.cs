@@ -52,6 +52,67 @@ public sealed class GalleryQueryTests : IDisposable
         => (await _media.GetLayoutItemsAsync(new MediaFilter(Search: Path.GetFileNameWithoutExtension(name)))).Single().Id;
 
     [Fact]
+    public async Task Search_finds_text_anywhere_in_folder_and_file_names()
+    {
+        await SeedAsync();
+        MediaItem At(string relPath) => new()
+        {
+            LibraryId = _other, RelPath = relPath, FileName = Path.GetFileName(relPath), Kind = MediaKind.Video, SizeBytes = 1,
+            ModifiedUtc = Jan, DateTaken = Jan, Width = 16, Height = 9, ProbeState = ProbeState.Done, ScanId = 1
+        };
+        await _media.UpsertBatchAsync([
+            At("youtube/IdiotsKPOP/8f14e45fceea167a5a36dedd4bea2543.webm"),
+            At("short/WeLoveTZUYU/1029384756.webm"),
+            At("short/anon_cam/260628 하츠투하츠 이안 RUDE! 직캠.webm")]);
+
+        (await NamesAsync(new MediaFilter(Search: "kpop"))).Should().Equal("8f14e45fceea167a5a36dedd4bea2543.webm");
+        (await NamesAsync(new MediaFilter(Search: "TzUyU"))).Should().Equal(["1029384756.webm"], "any case, inside a word");
+        (await NamesAsync(new MediaFilter(Search: "short tzuyu"))).Should().Equal(["1029384756.webm"], "every term must match");
+        (await NamesAsync(new MediaFilter(Search: "e45fce"))).Should().Equal("8f14e45fceea167a5a36dedd4bea2543.webm");
+        (await NamesAsync(new MediaFilter(Search: "하츠투"))).Should().ContainSingle();
+        (await NamesAsync(new MediaFilter(Search: "이안"))).Should().ContainSingle("two characters still match a whole word");
+        (await NamesAsync(new MediaFilter(Search: "\"quoted"))).Should().BeEmpty("quotes in the search are text, not syntax");
+
+        // Moved files are found under their new folder, and no longer under the old one.
+        using (var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(_dir, "t.db")}"))
+        {
+            conn.Open();
+            new Microsoft.Data.Sqlite.SqliteCommand(
+                "UPDATE Media SET RelPath = 'short/Sana_Daily/1029384756.webm' WHERE FileName = '1029384756.webm'", conn).ExecuteNonQuery();
+        }
+        (await NamesAsync(new MediaFilter(Search: "tzuyu"))).Should().BeEmpty();
+        (await NamesAsync(new MediaFilter(Search: "sana_d"))).Should().Equal("1029384756.webm");
+    }
+
+    [Fact]
+    public async Task Random_order_is_stable_per_seed_and_keeps_the_filters()
+    {
+        await SeedAsync();
+
+        var first = await NamesAsync(new MediaFilter(Sort: MediaSort.Random, Seed: 7));
+        (await NamesAsync(new MediaFilter(Sort: MediaSort.Random, Seed: 7))).Should().Equal(first, "refreshes must not reshuffle");
+        first.Should().BeEquivalentTo("beach.jpg", "cat.png", "party.mp4", "zebra.jpg");
+
+        var orders = new HashSet<string>();
+        for (var seed = 0; seed < 20; seed++)
+            orders.Add(string.Join(",", await NamesAsync(new MediaFilter(Sort: MediaSort.Random, Seed: seed))));
+        orders.Count.Should().BeGreaterThan(5, "different seeds give different orders");
+
+        (await NamesAsync(new MediaFilter(Kind: MediaKind.Image, LibraryId: _photos, Sort: MediaSort.Random, Seed: 3)))
+            .Should().BeEquivalentTo("beach.jpg", "cat.png");
+    }
+
+    [Fact]
+    public void Shuffle_spreads_out_files_of_one_folder()
+    {
+        // Files of a folder get consecutive IDs; a weak hash would keep them side by side.
+        var order = Enumerable.Range(1, 1000).OrderBy(id => SqliteMediaRepository.ShufflePosition(id, 42)).ToList();
+        var stillNeighbours = order.Zip(order.Skip(1)).Count(p => Math.Abs(p.First - p.Second) == 1);
+
+        stillNeighbours.Should().BeLessThan(10);
+    }
+
+    [Fact]
     public async Task Filters_narrow_the_gallery()
     {
         await SeedAsync();
@@ -102,7 +163,7 @@ public sealed class GalleryQueryTests : IDisposable
 
         (await _media.GetTagsForMediaAsync(beach)).Select(t => t.Name).Should().BeEquivalentTo(["Summer", "trip"]);
         (await _media.ListTagsAsync()).Should().Equal(new TagCount("Summer", 2), new TagCount("trip", 1));
-        (await NamesAsync(new MediaFilter(Tag: "summer"))).Should().Equal("cat.png", "beach.jpg");
+        (await NamesAsync(new MediaFilter(Tags: ["summer"]))).Should().Equal("cat.png", "beach.jpg");
 
         await _media.SetTagsAsync(beach, ["Summer"]);
         (await _media.ListTagsAsync()).Select(t => t.Name).Should().Equal(["Summer"], "unused tags are dropped");

@@ -1,6 +1,7 @@
 namespace MasonryGallery.Application.UseCases;
 
 using MasonryGallery.Application.Ports;
+using MasonryGallery.Application.Settings;
 using MasonryGallery.Domain;
 using Microsoft.Extensions.Logging;
 
@@ -48,6 +49,7 @@ public sealed class LibraryMonitor : IDisposable
     private readonly Lock _lock = new();
     private readonly Dictionary<int, Entry> _entries = [];
     private readonly CancellationTokenSource _stop = new();
+    private readonly ISettingsStore? _settings;
 
     private sealed class Entry(Library library)
     {
@@ -68,7 +70,8 @@ public sealed class LibraryMonitor : IDisposable
         ScanScheduler scheduler,
         IClock clock,
         ILogger<LibraryMonitor> logger,
-        MonitorOptions? options = null)
+        MonitorOptions? options = null,
+        ISettingsStore? settings = null)
     {
         _libraries = libraries;
         _watchers = watchers;
@@ -78,6 +81,21 @@ public sealed class LibraryMonitor : IDisposable
         _logger = logger;
         _options = options ?? MonitorOptions.Default;
         _scheduler.Completed += OnScanCompleted;
+        _settings = settings;
+        if (_settings is not null)
+            _settings.Changed += OnSettingsChanged;
+    }
+
+    // Changed patterns can hide files that are indexed or reveal ones that aren't; only a full walk settles both.
+    private void OnSettingsChanged(AppSettings before, AppSettings after)
+    {
+        if (before.IgnorePatterns.SequenceEqual(after.IgnorePatterns))
+            return;
+        List<LibraryId> ids;
+        lock (_lock)
+            ids = _entries.Values.Select(e => e.Library.Id).ToList();
+        _logger.LogInformation("Ignore patterns changed; rescanning {Count} libraries", ids.Count);
+        ids.ForEach(_scheduler.RequestFullScan);
     }
 
     /// <summary>Raised when any library's <see cref="WatchStatus"/> may have changed.</summary>
@@ -303,6 +321,8 @@ public sealed class LibraryMonitor : IDisposable
     {
         _stop.Cancel();
         _scheduler.Completed -= OnScanCompleted;
+        if (_settings is not null)
+            _settings.Changed -= OnSettingsChanged;
         List<Entry> released;
         lock (_lock)
         {

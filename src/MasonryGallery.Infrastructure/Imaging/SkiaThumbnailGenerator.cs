@@ -36,7 +36,7 @@ public sealed class SkiaThumbnailGenerator : IThumbnailGenerator
             if (decoded == null)
                 return Result<ThumbnailImage>.Failure("Cannot decode image");
 
-            return ThumbnailEncoder.Encode(decoded, codec.EncodedOrigin, longEdge);
+            return ThumbnailEncoder.Encode(decoded, codec.EncodedOrigin, longEdge, job.Quality);
         }
         catch (Exception ex)
         {

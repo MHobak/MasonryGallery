@@ -1,0 +1,187 @@
+@inject GalleryService Gallery
+
+<div class="scrim" @onclick="OnClose"></div>
+<aside class="drawer settings" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1" @ref="_root"
+       @onkeydown="OnKeyAsync">
+    <div class="drawer-head">
+        <h2>Settings</h2>
+        <button type="button" class="icon-btn" aria-label="Close" @onclick="OnClose">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+    </div>
+
+    <form @onsubmit="SaveAsync">
+        <section>
+            <h3>Indexing</h3>
+            <div class="setting">
+                <label for="workers">Worker threads</label>
+                <label class="check"><input type="checkbox" @bind="_workersAuto" /> Automatic</label>
+                <input id="workers" type="number" min="1" max="@AppSettings.MaxWorkers" @bind="_workers" disabled="@_workersAuto" />
+            </div>
+            <div class="setting">
+                <label for="video-workers">Video processes</label>
+                <label class="check"><input type="checkbox" @bind="_videoAuto" /> Automatic</label>
+                <input id="video-workers" type="number" min="1" max="@AppSettings.MaxWorkers" @bind="_videoWorkers" disabled="@_videoAuto" />
+            </div>
+            <p class="hint">Automatic uses every core but one on SSDs and 2 on spinning or network drives. Applies from the next scan.</p>
+        </section>
+
+        <section>
+            <h3>Thumbnails</h3>
+            <div class="setting">
+                <label for="quality">Quality</label>
+                <input id="quality" type="range" min="@AppSettings.MinQuality" max="@AppSettings.MaxQuality" step="5"
+                       @bind="_quality" @bind:event="oninput" />
+                <output for="quality">@_quality</output>
+            </div>
+            <p class="hint">Higher looks better and takes more disk. Applies to thumbnails made from now on.</p>
+            <div class="setting">
+                <label for="cache-limit">Preview cache limit</label>
+                <input id="cache-limit" type="number" min="0" step="256" @bind="_cacheLimitMb" /> <span>MB</span>
+            </div>
+            <p class="hint">Large lightbox previews are recreated when opened again. 0 means no limit.</p>
+            @if (_usage is { } usage)
+            {
+                <p class="usage">
+                    Previews: @Bytes(usage.Previews.Bytes) (@usage.Previews.Files.ToString("N0"))
+                    · Grid thumbnails: @Bytes(usage.Thumbnails.Bytes) (@usage.Thumbnails.Files.ToString("N0"))
+                </p>
+            }
+            <button type="button" class="btn small" disabled="@(_usage is null || _usage.Value.Previews.Files == 0)" @onclick="ClearPreviewsAsync">
+                Clear previews
+            </button>
+        </section>
+
+        <section>
+            <h3>Presentation</h3>
+            <div class="setting">
+                <label for="slide-seconds">Autoplay: seconds per image</label>
+                <input id="slide-seconds" type="number" min="1" max="@AppSettings.MaxSlideSeconds" @bind="_slideSeconds" />
+            </div>
+            <p class="hint">Videos play to their end before autoplay moves on, unless they are set to loop.</p>
+        </section>
+
+        <section>
+            <h3>Ignore</h3>
+            <label for="ignore" class="hint">File or folder names to skip, one per line. * and ? are wildcards, e.g. <code>*_edited.jpg</code> or <code>Screenshots</code>.</label>
+            <textarea id="ignore" rows="4" spellcheck="false" @bind="_ignore"></textarea>
+            <p class="hint">Saving changed patterns rescans every library.</p>
+        </section>
+
+        <section>
+            <h3>FFmpeg</h3>
+            <input type="text" aria-label="FFmpeg folder" placeholder="Folder with ffmpeg and ffprobe (optional)" @bind="_ffmpeg" />
+            <p class="hint">Leave empty to use the bundled copy or the one on your PATH. Takes effect after a restart.</p>
+        </section>
+
+        @if (_message is not null)
+        {
+            <p class="@(_failed ? "error" : "hint")" role="status">@_message</p>
+        }
+
+        <div class="actions">
+            <button type="submit" class="btn primary">Save</button>
+            <button type="button" class="btn" @onclick="RestoreDefaults">Restore defaults</button>
+        </div>
+    </form>
+
+    <section>
+        <h3>Logs</h3>
+        <button type="button" class="btn small" @onclick="OpenLogs">Open logs folder</button>
+    </section>
+</aside>
+
+@code {
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private ElementReference _root;
+    private bool _workersAuto, _videoAuto, _failed;
+    private int _workers, _videoWorkers, _quality, _cacheLimitMb, _slideSeconds;
+    private string _ignore = "", _ffmpeg = "";
+    private string? _message;
+    private (CacheUsage Thumbnails, CacheUsage Previews)? _usage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Show(Gallery.GetSettings());
+        await LoadUsageAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await _root.FocusAsync();
+    }
+
+    private void Show(AppSettings s)
+    {
+        var cores = Math.Max(1, Environment.ProcessorCount - 1);
+        _workersAuto = s.Workers is null;
+        _workers = s.Workers ?? cores;
+        _videoAuto = s.VideoWorkers is null;
+        _videoWorkers = s.VideoWorkers ?? Math.Max(1, Environment.ProcessorCount / 2);
+        _quality = s.ThumbnailQuality;
+        _cacheLimitMb = s.PreviewCacheLimitMb;
+        _slideSeconds = s.SlideshowSeconds;
+        _ignore = string.Join('\n', s.IgnorePatterns);
+        _ffmpeg = s.FfmpegFolder ?? "";
+    }
+
+    private AppSettings Read() => new()
+    {
+        Workers = _workersAuto ? null : _workers,
+        VideoWorkers = _videoAuto ? null : _videoWorkers,
+        ThumbnailQuality = _quality,
+        PreviewCacheLimitMb = _cacheLimitMb,
+        SlideshowSeconds = _slideSeconds,
+        IgnorePatterns = _ignore.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
+        FfmpegFolder = string.IsNullOrWhiteSpace(_ffmpeg) ? null : _ffmpeg.Trim(),
+    };
+
+    private async Task SaveAsync()
+    {
+        var result = await Gallery.SaveSettingsAsync(Read());
+        _failed = !result.IsSuccess;
+        _message = result.IsSuccess ? "Saved." : result.Error;
+    }
+
+    private void RestoreDefaults()
+    {
+        Show(Gallery.GetDefaultSettings());
+        _failed = false;
+        _message = "Defaults restored. Save to apply them.";
+    }
+
+    private async Task ClearPreviewsAsync()
+    {
+        var removed = await Gallery.ClearPreviewsAsync();
+        _failed = false;
+        _message = $"Cleared {Bytes(removed.Bytes)} of previews.";
+        await LoadUsageAsync();
+    }
+
+    private void OpenLogs()
+    {
+        var result = Gallery.OpenLogsFolder();
+        if (!result.IsSuccess)
+        {
+            _failed = true;
+            _message = result.Error;
+        }
+    }
+
+    private async Task LoadUsageAsync() => _usage = await Gallery.GetCacheUsageAsync();
+
+    private async Task OnKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            await OnClose.InvokeAsync();
+    }
+
+    private static string Bytes(long bytes) => bytes switch
+    {
+        >= 1L << 30 => $"{bytes / (double)(1L << 30):0.0} GB",
+        >= 1L << 20 => $"{bytes / (double)(1L << 20):0} MB",
+        _ => $"{bytes / 1024.0:0} KB",
+    };
+}

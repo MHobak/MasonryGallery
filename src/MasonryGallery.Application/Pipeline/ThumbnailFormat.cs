@@ -15,4 +15,7 @@ public static class ThumbnailFormat
 
     /// <summary>Long edge of lightbox previews, generated on first open.</summary>
     public const int Medium = 960;
+
+    /// <summary>WebP quality used unless the user picks another.</summary>
+    public const int DefaultQuality = 80;
 }

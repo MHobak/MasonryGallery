@@ -8,7 +8,10 @@ using Microsoft.Extensions.Logging;
 /// <param name="Workers">Probe and thumbnail parallelism; kept low on spinning or network disks (design §5.5).</param>
 /// <param name="VideoWorkers">Cap on concurrent ffprobe/ffmpeg processes.</param>
 /// <param name="Viewport">On-screen IDs, served first by the thumbnail stage.</param>
-public sealed record IngestOptions(int Workers, int VideoWorkers, ViewportHint Viewport);
+/// <param name="Quality">WebP quality of generated thumbnails.</param>
+/// <param name="Sidecars">Reads XMP sidecars during the probe stage; null skips them.</param>
+public sealed record IngestOptions(int Workers, int VideoWorkers, ViewportHint Viewport, int Quality = ThumbnailFormat.DefaultQuality,
+    ISidecarReader? Sidecars = null);
 
 public sealed class IngestPipeline : IDisposable
 {
@@ -55,7 +58,7 @@ public sealed class IngestPipeline : IDisposable
             await Task.WhenAll(
                 CancelOthersOnFault(RunEnumerationAsync(library, files, scanId, stages.Token), stages),
                 CancelOthersOnFault(RunDiffAsync(library.Id.Value, mediaRepository, progress, stages.Token), stages),
-                CancelOthersOnFault(RunProbeAsync(mediaProbe, mediaRepository, library.RootPath, options, progress, stages.Token), stages));
+                CancelOthersOnFault(RunProbeAsync(mediaProbe, mediaRepository, library, options, progress, stages.Token), stages));
         }
         await RunThumbnailsAsync(library, mediaRepository, thumbnailGenerator, thumbnailStore, options, progress, ct);
         _logger.LogInformation("Ingest pipeline completed for library {LibraryId}", library.Id.Value);
@@ -100,6 +103,8 @@ public sealed class IngestPipeline : IDisposable
                     ModifiedUtc = entry.ModifiedUtc,
                     DateTaken = entry.ModifiedUtc,
                     ScanId = scanId,
+                    SidecarPath = entry.SidecarPath is { } sidecar ? NormalizePath(sidecar) : null,
+                    SidecarModifiedUtc = entry.SidecarModifiedUtc,
                     ProbeState = ProbeState.Pending,
                     ThumbState = ThumbState.Pending,
                     DateAdded = DateTime.UtcNow
@@ -161,11 +166,14 @@ public sealed class IngestPipeline : IDisposable
     }
 
     // Unchanged files keep their stored probe result, so a no-change rescan reads no file headers.
+    // A new, edited or deleted sidecar is re-read by probing again; the thumbnail is left alone.
     private static bool NeedsProbe(MediaItem item, ScanState? known)
         => known is null
            || known.ProbeState == ProbeState.Pending
            || known.SizeBytes != item.SizeBytes
-           || ToUnixMs(known.ModifiedUtc) != ToUnixMs(item.ModifiedUtc);
+           || ToUnixMs(known.ModifiedUtc) != ToUnixMs(item.ModifiedUtc)
+           || (known.SidecarModifiedUtc is { } was ? ToUnixMs(was) : (long?)null)
+              != (item.SidecarModifiedUtc is { } now ? ToUnixMs(now) : (long?)null);
 
     // The DB stores milliseconds; file system timestamps carry sub-millisecond ticks.
     private static long ToUnixMs(DateTime utc)
@@ -174,13 +182,14 @@ public sealed class IngestPipeline : IDisposable
     private async Task RunProbeAsync(
         IMediaProbe mediaProbe,
         IMediaRepository mediaRepository,
-        string rootPath,
+        Library library,
         IngestOptions options,
         IProgressReporter progress,
         CancellationToken ct)
     {
+        var rootPath = library.RootPath;
         using var videoGate = new SemaphoreSlim(options.VideoWorkers);
-        var batch = new List<MediaItem>(ProbeBatch);
+        var batch = new List<(MediaItem Item, SidecarData? Sidecar)>(ProbeBatch);
 
         await Parallel.ForEachAsync(_toProbe.Reader.ReadAllAsync(ct),
             new ParallelOptions { MaxDegreeOfParallelism = options.Workers, CancellationToken = ct },
@@ -189,13 +198,16 @@ public sealed class IngestPipeline : IDisposable
                 var metadata = await GatedAsync(item.Kind, videoGate,
                     () => mediaProbe.ProbeAsync(Path.Combine(rootPath, item.RelPath), item.Kind, token).AsTask(), token);
 
+                var sidecar = await ReadSidecarAsync(options.Sidecars, rootPath, item, token);
+
                 if (metadata.IsSuccess)
                 {
                     var m = metadata.Value!;
                     item.Width = m.Width;
                     item.Height = m.Height;
                     item.DurationMs = m.DurationMs;
-                    item.DateTaken = m.DateTaken;
+                    // The file's own capture date wins; the sidecar's fills in for files without one.
+                    item.DateTaken = m.DateTaken ?? sidecar?.DateTaken;
                     item.Playable = item.Kind == MediaKind.Video ? m.NativePlayable : null;
                     item.ProbeState = ProbeState.Done;
                 }
@@ -205,10 +217,10 @@ public sealed class IngestPipeline : IDisposable
                     item.ErrorCode = 1;
                 }
 
-                List<MediaItem>? full = null;
+                List<(MediaItem Item, SidecarData? Sidecar)>? full = null;
                 lock (batch)
                 {
-                    batch.Add(item);
+                    batch.Add((item, sidecar));
                     if (batch.Count >= ProbeBatch)
                     {
                         full = [.. batch];
@@ -217,17 +229,35 @@ public sealed class IngestPipeline : IDisposable
                 }
                 if (full is not null)
                 {
-                    await mediaRepository.UpsertBatchAsync(full, token);
+                    await SaveProbedAsync(full, token);
                     progress.ItemsChanged(); // real aspect ratios replace the 1:1 placeholders
                 }
             });
 
         if (batch.Count > 0)
         {
-            await mediaRepository.UpsertBatchAsync(batch, ct);
+            await SaveProbedAsync(batch, ct);
             progress.ItemsChanged();
         }
         _logger.LogInformation("Probe stage completed");
+
+        async Task SaveProbedAsync(List<(MediaItem Item, SidecarData? Sidecar)> probed, CancellationToken token)
+        {
+            await mediaRepository.UpsertBatchAsync(probed.Select(p => p.Item), token);
+            // Every re-probed item: one whose sidecar disappeared or broke has its old tags cleared.
+            if (options.Sidecars is not null)
+                await mediaRepository.SaveSidecarsAsync(library.Id.Value, probed.ConvertAll(p => (p.Item.RelPath, p.Sidecar)), token);
+        }
+    }
+
+    private async Task<SidecarData?> ReadSidecarAsync(ISidecarReader? reader, string rootPath, MediaItem item, CancellationToken ct)
+    {
+        if (reader is null || item.SidecarPath is null)
+            return null;
+        var result = await reader.ReadAsync(Path.Combine(rootPath, item.SidecarPath), ct);
+        if (!result.IsSuccess)
+            _logger.LogWarning("Ignoring unreadable sidecar {Path}: {Error}", item.SidecarPath, result.Error);
+        return result.Value;
     }
 
     private async Task RunThumbnailsAsync(
@@ -256,7 +286,7 @@ public sealed class IngestPipeline : IDisposable
         {
             await foreach (var item in queue.Reader.ReadAllAsync(stages.Token))
             {
-                await GenerateThumbnailAsync(library, item, thumbnailGenerator, thumbnailStore, mediaRepository, progress, videoGate, stages.Token);
+                await GenerateThumbnailAsync(library, item, thumbnailGenerator, thumbnailStore, mediaRepository, progress, videoGate, options.Quality, stages.Token);
                 var n = Interlocked.Increment(ref done);
                 if (n >= total || throttle.Due())
                     progress.Report(new PipelineEvent("Generating thumbnails", Math.Min(n, total), total));
@@ -324,10 +354,11 @@ public sealed class IngestPipeline : IDisposable
         IMediaRepository mediaRepository,
         IProgressReporter progress,
         SemaphoreSlim videoGate,
+        int quality,
         CancellationToken ct)
     {
         var job = new ThumbnailJob(item.Id, Path.Combine(library.RootPath, item.RelPath), item.Kind,
-            ThumbnailFormat.Version, item.DurationMs);
+            ThumbnailFormat.Version, item.DurationMs, quality);
 
         var result = await GatedAsync(item.Kind, videoGate,
             () => thumbnailGenerator.GenerateSmallAsync(job, ct).AsTask(), ct);

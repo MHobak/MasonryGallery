@@ -204,6 +204,22 @@ export function create(host, dotnet, mediaBase, token) {
         const tile = e.target.closest('.tile');
         if (tile) dotnet.invokeMethodAsync('OpenMedia', Number(tile.dataset.id));
     });
+    // Ctrl+N anywhere in the gallery opens another window (the viewer stops its keys from reaching here).
+    const onGlobalKey = e => {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'n' || e.key === 'N')) {
+            e.preventDefault();
+            dotnet.invokeMethodAsync('NewWindow');
+        }
+    };
+    document.addEventListener('keydown', onGlobalKey);
+
+    // P on a focused tile starts a presentation from it.
+    host.addEventListener('keydown', e => {
+        const tile = e.target.closest('.tile');
+        if (!tile || (e.key !== 'p' && e.key !== 'P') || e.ctrlKey || e.metaKey || e.altKey) return;
+        e.preventDefault();
+        dotnet.invokeMethodAsync('PresentMedia', Number(tile.dataset.id));
+    });
 
     const observer = new ResizeObserver(() => {
         if (host.clientWidth === width) { schedule(); return; }
@@ -270,6 +286,7 @@ export function create(host, dotnet, mediaBase, token) {
             tiles.get(i)?.focus({ preventScroll: true });
         },
         dispose() {
+            document.removeEventListener('keydown', onGlobalKey);
             observer.disconnect();
             cancelAnimationFrame(frame);
             clearTimeout(resizeTimer);

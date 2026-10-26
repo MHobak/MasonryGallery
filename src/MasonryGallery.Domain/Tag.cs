@@ -5,6 +5,12 @@ public sealed class Tag
     public int Id { get; internal set; }
     public string Name { get; init; } = string.Empty;
 
+    /// <summary>Group from a hierarchical sidecar keyword ("Artist" for "Artist|name"); null for plain tags.</summary>
+    public string? Category { get; init; }
+
+    /// <summary>Read from the file's XMP sidecar; replaced when the sidecar changes, not editable in the app.</summary>
+    public bool FromSidecar { get; init; }
+
     public Tag(string name)
     {
         Name = name;

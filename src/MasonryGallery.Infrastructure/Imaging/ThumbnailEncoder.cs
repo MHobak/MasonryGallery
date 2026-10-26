@@ -6,10 +6,9 @@ using SkiaSharp;
 /// <summary>Resize, orient and WebP-encode a decoded frame; shared by the image and video generators.</summary>
 internal static class ThumbnailEncoder
 {
-    private const int WebpQuality = 80;
     private static readonly SKSamplingOptions Sampling = new(SKFilterMode.Linear, SKMipmapMode.Linear);
 
-    public static ThumbnailImage Encode(SKBitmap source, SKEncodedOrigin origin, int longEdge)
+    public static ThumbnailImage Encode(SKBitmap source, SKEncodedOrigin origin, int longEdge, int quality)
     {
         var scale = Math.Min(1.0, (double)longEdge / Math.Max(source.Width, source.Height));
         using var resized = scale < 1.0
@@ -25,7 +24,7 @@ internal static class ThumbnailEncoder
         var final = oriented ?? sized;
 
         using var image = SKImage.FromBitmap(final);
-        using var data = image.Encode(SKEncodedImageFormat.Webp, WebpQuality);
+        using var data = image.Encode(SKEncodedImageFormat.Webp, quality);
         return new ThumbnailImage(data.ToArray(), AverageRgb(final));
     }
 

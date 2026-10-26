@@ -3,6 +3,7 @@ namespace MasonryGallery.Application.UseCases;
 using System.Collections.ObjectModel;
 using MasonryGallery.Application.Pipeline;
 using MasonryGallery.Application.Ports;
+using MasonryGallery.Application.Settings;
 using MasonryGallery.Domain;
 using Microsoft.Extensions.Logging;
 
@@ -33,6 +34,8 @@ public sealed class Scan : ILibraryScanner
     private readonly IProgressReporter _progress;
     private readonly ILogger<Scan> _logger;
     private readonly ViewportHint _viewport;
+    private readonly ISettingsStore? _settings;
+    private readonly ISidecarReader? _sidecars;
 
     public Scan(
         ILibraryRepository libraryRepository,
@@ -44,9 +47,13 @@ public sealed class Scan : ILibraryScanner
         IClock clock,
         IProgressReporter progress,
         ILogger<Scan> logger,
-        ViewportHint? viewport = null)
+        ViewportHint? viewport = null,
+        ISettingsStore? settings = null,
+        ISidecarReader? sidecars = null)
     {
+        _sidecars = sidecars;
         _viewport = viewport ?? new ViewportHint();
+        _settings = settings;
         _libraryRepository = libraryRepository;
         _mediaRepository = mediaRepository;
         _fileEnumerator = fileEnumerator;
@@ -143,21 +150,26 @@ public sealed class Scan : ILibraryScanner
                 continue;
             }
 
-            var info = _fileEnumerator.Inspect(library.RootPath, path, library.FollowSymlinks);
-            switch (info.Kind)
+            // A sidecar changed, appeared or went away: re-read the media file(s) it describes.
+            var owners = _fileEnumerator.FindSidecarOwners(library.RootPath, path);
+            foreach (var target in owners.Count > 0 ? owners : [path])
             {
-                case PathKind.Missing:
-                    gone.Add(path);
-                    break;
-                case PathKind.Directory:
-                    folders.Add(path);
-                    break;
-                case PathKind.File when _clock.UtcNow - info.File!.ModifiedUtc < SettleTime:
-                    deferred.Add(path);
-                    break;
-                case PathKind.File:
-                    files.Add(info.File!);
-                    break;
+                var info = _fileEnumerator.Inspect(library.RootPath, target, library.FollowSymlinks);
+                switch (info.Kind)
+                {
+                    case PathKind.Missing:
+                        gone.Add(target);
+                        break;
+                    case PathKind.Directory:
+                        folders.Add(target);
+                        break;
+                    case PathKind.File when IsSettling(info.File!.ModifiedUtc) || (info.File.SidecarModifiedUtc is { } s && IsSettling(s)):
+                        deferred.Add(target);
+                        break;
+                    case PathKind.File:
+                        files.Add(info.File!);
+                        break;
+                }
             }
         }
 
@@ -174,7 +186,8 @@ public sealed class Scan : ILibraryScanner
         if (files.Count > 0 || folders.Count > 0)
         {
             await new IngestPipeline(_logger).RunAsync(
-                library, Concat(files, folders, library, ct), _mediaRepository, _mediaProbe, _thumbnailGenerator,
+                // A file and its sidecar changing together would otherwise queue the file twice.
+                library, Concat(files.DistinctBy(f => f.RelativePath).ToList(), folders, library, ct), _mediaRepository, _mediaProbe, _thumbnailGenerator,
                 _thumbnailStore, scanId, OptionsFor(library.RootPath), _progress, ct);
         }
 
@@ -197,6 +210,8 @@ public sealed class Scan : ILibraryScanner
         return all.Where(p => !AncestorsOf(p).Any(all.Contains)).Order(StringComparer.Ordinal);
     }
 
+    private bool IsSettling(DateTime modifiedUtc) => _clock.UtcNow - modifiedUtc < SettleTime;
+
     private static IEnumerable<string> AncestorsOf(string relPath)
     {
         for (var i = relPath.LastIndexOf('/'); i > 0; i = relPath.LastIndexOf('/', i - 1))
@@ -217,12 +232,14 @@ public sealed class Scan : ILibraryScanner
     }
 
     // Seeks dominate on spinning disks and latency on network shares; more workers only add thrashing there.
+    // Read per scan, so a changed setting applies from the next scan on.
     private IngestOptions OptionsFor(string rootPath)
     {
+        var settings = _settings?.Current ?? new AppSettings();
         var slow = _fileEnumerator.IsNetworkPath(rootPath) || _fileEnumerator.IsRotationalDisk(rootPath);
-        var workers = slow ? 2 : Math.Max(1, Environment.ProcessorCount - 1);
-        var videoWorkers = Math.Clamp(Environment.ProcessorCount / 2, 1, workers);
-        return new IngestOptions(workers, videoWorkers, _viewport);
+        var workers = settings.Workers ?? (slow ? 2 : Math.Max(1, Environment.ProcessorCount - 1));
+        var videoWorkers = Math.Min(settings.VideoWorkers ?? Math.Max(1, Environment.ProcessorCount / 2), workers);
+        return new IngestOptions(workers, videoWorkers, _viewport, settings.ThumbnailQuality, _sidecars);
     }
 
     // Only after rows were permanently deleted can thumbnails become orphaned, so the walk is rare.

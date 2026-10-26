@@ -1,6 +1,8 @@
 namespace MasonryGallery.Application.Ports;
 
-public record FileEntry(string RelativePath, long Size, DateTime ModifiedUtc);
+/// <param name="SidecarPath">The file's XMP sidecar ("a.jpg.xmp" or "a.xmp"), relative to the root, if any.</param>
+public record FileEntry(string RelativePath, long Size, DateTime ModifiedUtc,
+    string? SidecarPath = null, DateTime? SidecarModifiedUtc = null);
 
 public enum PathKind
 {
@@ -38,6 +40,12 @@ public interface IFileEnumerator
 
     /// <summary>Classifies one path under the root by the same rules <see cref="EnumerateAsync"/> applies.</summary>
     PathInfo Inspect(string rootPath, string relPath, bool followSymlinks);
+
+    /// <summary>
+    /// The media files an XMP sidecar describes (relative to the root): "a.jpg" for "a.jpg.xmp",
+    /// every "a.*" media file for "a.xmp". Empty when the path is not a sidecar or describes nothing.
+    /// </summary>
+    IReadOnlyList<string> FindSidecarOwners(string rootPath, string relSidecarPath);
 
     /// <summary>False when the library root is unplugged, unmounted or otherwise unreachable.</summary>
     bool RootExists(string rootPath);

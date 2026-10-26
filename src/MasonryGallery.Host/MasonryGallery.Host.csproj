@@ -22,6 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MasonryGallery.Application\MasonryGallery.Application.csproj" />

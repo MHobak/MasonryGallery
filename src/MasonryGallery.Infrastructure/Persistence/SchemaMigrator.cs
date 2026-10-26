@@ -12,8 +12,22 @@ public static class SchemaMigrator
         "0002_fts_triggers.sql",
         "0003_regen_video_thumbs.sql",
         "0004_reprobe_images.sql",
-        "0005_playable_favorites.sql"
+        "0005_playable_favorites.sql",
+        "0006_xmp_sidecars.sql",
+        "0007_path_substring_search.sql"
     ];
+
+    /// <summary>The version <see cref="MigrateAsync"/> brings a database to.</summary>
+    public static int LatestVersion => _migrations.Length;
+
+    /// <summary>The version a database is at, without changing it; 0 for a new file.</summary>
+    public static async Task<int> GetVersionAsync(SqliteConnectionFactory factory)
+    {
+        using var conn = factory.CreateConnection();
+        var hasTable = await conn.ExecuteScalarAsync<long>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'SchemaVersion'");
+        return hasTable == 0 ? 0 : await conn.QuerySingleOrDefaultAsync<int?>("SELECT MAX(Version) FROM SchemaVersion") ?? 0;
+    }
 
     public static async Task MigrateAsync(SqliteConnectionFactory factory, ILogger logger, CancellationToken ct = default)
     {

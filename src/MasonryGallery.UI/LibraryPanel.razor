@@ -2,7 +2,8 @@
 @inject FolderPicker Picker
 
 <div class="scrim" @onclick="OnClose"></div>
-<aside class="drawer" role="dialog" aria-modal="true" aria-label="Libraries">
+<aside class="drawer" role="dialog" aria-modal="true" aria-label="Libraries" tabindex="-1" @ref="_root"
+       @onkeydown="OnKeyAsync">
     <div class="drawer-head">
         <h2>Libraries</h2>
         <button type="button" class="icon-btn" aria-label="Close" @onclick="OnClose">
@@ -110,11 +111,25 @@
     private LibraryId? _confirmRemove;
     private int _failedCount;
     private IReadOnlyList<FailedItem> _failed = [];
+    private ElementReference _root;
 
     protected override async Task OnInitializedAsync()
     {
         _failedCount = await Gallery.CountFailedAsync();
         if (_failedCount > 0) _failed = await Gallery.GetFailedAsync(100);
+    }
+
+    // Focus moves into the dialog so Escape works without clicking it first.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await _root.FocusAsync();
+    }
+
+    private async Task OnKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            await OnClose.InvokeAsync();
     }
 
     private static string StatusClass(Library l) => l.Enabled ? l.Status.ToString().ToLowerInvariant() : "disabled";

@@ -115,6 +115,62 @@ public sealed class ShardedThumbnailStore : IThumbnailStore
         return Task.FromResult(removed);
     }
 
+    public Task<CacheUsage> GetUsageAsync(int size, CancellationToken ct = default)
+    {
+        var files = 0;
+        var bytes = 0L;
+        foreach (var file in EnumerateThumbnails(size))
+        {
+            ct.ThrowIfCancellationRequested();
+            files++;
+            bytes += file.Length;
+        }
+        return Task.FromResult(new CacheUsage(files, bytes));
+    }
+
+    public Task<CacheUsage> TrimAsync(int size, long maxBytes, CancellationToken ct = default)
+    {
+        var all = EnumerateThumbnails(size).ToList();
+        var total = all.Sum(f => f.Length);
+        if (total <= maxBytes)
+            return Task.FromResult(new CacheUsage(0, 0));
+
+        // Trim to 90% so a cache sitting at its limit isn't trimmed again after every few new previews.
+        var target = maxBytes * 9 / 10;
+        var files = 0;
+        var bytes = 0L;
+        // Access times are coarse (relatime) or frozen (noatime); a recent write counts as a use too.
+        foreach (var file in all.OrderBy(f => f.LastAccessTimeUtc > f.LastWriteTimeUtc ? f.LastAccessTimeUtc : f.LastWriteTimeUtc))
+        {
+            if (total <= target)
+                break;
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var length = file.Length; // FileInfo refreshes after Delete, and Length then throws
+                file.Delete();
+                total -= length;
+                files++;
+                bytes += length;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogDebug(ex, "Could not delete {File}", file.FullName);
+            }
+        }
+        _logger.LogInformation("Trimmed {Files} {Size} thumbnails ({Bytes:N0} bytes)", files, GetSizeDir(size), bytes);
+        return Task.FromResult(new CacheUsage(files, bytes));
+    }
+
+    // Finished thumbnails only; temp files from interrupted saves are CleanOrphansAsync's job.
+    private IEnumerable<FileInfo> EnumerateThumbnails(int size)
+    {
+        var dir = new DirectoryInfo(Path.Combine(_cacheRoot, _version, GetSizeDir(size)));
+        return dir.Exists
+            ? dir.EnumerateFiles("*.webp", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true })
+            : [];
+    }
+
     public Task DeleteStaleVersionsAsync(CancellationToken ct = default)
     {
         if (!Directory.Exists(_cacheRoot))

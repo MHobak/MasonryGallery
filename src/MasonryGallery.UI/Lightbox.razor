@@ -1,8 +1,9 @@
 @implements IAsyncDisposable
 @inject GalleryService Gallery
 @inject IJSRuntime JS
+@inject WindowControl Window
 
-<div class="lb" role="dialog" aria-modal="true" aria-label="Media viewer" tabindex="0" @ref="_root"
+<div class="lb @(_presenting ? "presenting" : null)" role="dialog" aria-modal="true" aria-label="Media viewer" tabindex="0" @ref="_root"
      @onkeydown="OnKey" @onkeydown:stopPropagation="true">
     <div class="lb-top">
         <div class="lb-title">
@@ -23,6 +24,17 @@
                         @onclick="() => _info = !_info">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
                 </button>
+                @if (IsPlayableVideo)
+                {
+                    <button type="button" class="icon-btn" aria-pressed="@Bool(Loop)" aria-label="Loop video" title="Loop video (R)"
+                            @onclick="ToggleLoop">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4"/></svg>
+                    </button>
+                }
+                <button type="button" class="icon-btn" aria-label="Presentation" title="Presentation, full screen (P). Autoplay: A"
+                        @onclick="() => SetPresentingAsync(true)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+                </button>
                 <button type="button" class="icon-btn" aria-label="Open in default app" title="Open in default app (O)"
                         @onclick="() => OpenExternallyAsync(false)">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
@@ -35,7 +47,41 @@
     </div>
 
     <div class="lb-body">
-        <div class="lb-stage" @ref="_stage" @onclick="CloseAsync">
+        @* In presentation a stray click must not end the show; Esc or the exit button does. *@
+        <div class="lb-stage" @ref="_stage" @onclick="OnStageClickAsync">
+            @if (_presenting)
+            {
+                <div class="present-bar" @onclick:stopPropagation="true">
+                    <span class="present-count">@(_pos + 1) / @Ids.Length</span>
+                    <button type="button" class="icon-btn" aria-pressed="@Bool(_autoplay)" aria-label="Autoplay"
+                            title="@(_autoplay ? "Pause autoplay (A)" : "Autoplay (A)")" @onclick="ToggleAutoplay">
+                        @if (_autoplay)
+                        {
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14"/></svg>
+                        }
+                        else
+                        {
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14l11-7z"/></svg>
+                        }
+                    </button>
+                    @if (IsPlayableVideo)
+                    {
+                        <button type="button" class="icon-btn" aria-pressed="@Bool(Loop)" aria-label="Loop video" title="Loop video (R)"
+                                @onclick="ToggleLoop">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4"/></svg>
+                        </button>
+                    }
+                    <button type="button" class="icon-btn" aria-label="Exit presentation" title="Exit presentation (Esc)"
+                            @onclick="() => SetPresentingAsync(false)">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+                    </button>
+                </div>
+                @if (_slideTimer is not null)
+                {
+                    @* Restarted per slide by @key (a string, so it never collides with the media element's ID key). *@
+                    <div class="slide-progress" @key="@($"slide-{_slideKey}")" style="animation-duration: @(SlideSeconds)s" aria-hidden="true"></div>
+                }
+            }
             <button type="button" class="nav prev" aria-label="Previous" disabled="@(_pos <= 0)"
                     @onclick="() => GoAsync(-1)" @onclick:stopPropagation="true">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg>
@@ -60,9 +106,9 @@
                     }
                     else
                     {
-                        <video @key="_item.Id" src="@Gallery.GetMediaUrl(_item.Id)" controls autoplay playsinline
+                        <video @key="_item.Id" src="@Gallery.GetMediaUrl(_item.Id)" controls autoplay playsinline loop="@Loop"
                                poster="@Gallery.GetThumbnailUrl(_item.Id, "medium")"
-                               @onerror="() => _videoFailed = true"
+                               @onerror="OnVideoError" @onended="OnVideoEndedAsync"
                                @onclick:stopPropagation="true"></video>
                     }
                 }
@@ -109,23 +155,70 @@
                     }
                     <dt>Added</dt>
                     <dd>@_item.DateAdded.ToLocalTime().ToString("d MMM yyyy")</dd>
+                    @if (_sidecar is { } x)
+                    {
+                        @if (x.Title is not null)
+                        {
+                            <dt>Title</dt>
+                            <dd>@x.Title</dd>
+                        }
+                        @if (x.Creator is not null)
+                        {
+                            <dt>Creator</dt>
+                            <dd>@x.Creator</dd>
+                        }
+                        @if (x.Rating is { } stars)
+                        {
+                            <dt>Rating</dt>
+                            <dd aria-label="@stars out of 5">@(new string('★', stars))@(new string('☆', 5 - stars))</dd>
+                        }
+                        @if (x.Source is not null)
+                        {
+                            <dt>Source</dt>
+                            <dd>
+                                @if (IsWebLink(x.Source))
+                                {
+                                    <button type="button" class="link" title="@x.Source" @onclick="() => OpenLink(x.Source)">@Host(x.Source)</button>
+                                }
+                                else
+                                {
+                                    <span title="@x.Source">@x.Source</span>
+                                }
+                            </dd>
+                        }
+                    }
                 </dl>
+                @if (_sidecar?.Description is { } description)
+                {
+                    <p class="lb-description">@description</p>
+                }
 
-                <h3>Tags</h3>
+                @foreach (var group in SidecarTagGroups)
+                {
+                    <h3>@group.Key</h3>
+                    <div class="tag-list">
+                        @foreach (var tag in group)
+                        {
+                            <button type="button" class="tag-chip link-chip" title="Show items tagged @tag.Name" @onclick="() => OnTagClicked.InvokeAsync(tag.Name)">@tag.Name</button>
+                        }
+                    </div>
+                }
+
+                <h3>@(_tags.Any(t => t.FromSidecar) ? "Your tags" : "Tags")</h3>
                 <div class="tag-list">
-                    @foreach (var tag in _tags)
+                    @foreach (var tag in _tags.Where(t => !t.FromSidecar))
                     {
                         <span class="tag-chip">
-                            @tag
-                            <button type="button" aria-label="Remove tag @tag" @onclick="() => RemoveTagAsync(tag)">×</button>
+                            <button type="button" class="name" title="Show items tagged @tag.Name" @onclick="() => OnTagClicked.InvokeAsync(tag.Name)">@tag.Name</button>
+                            <button type="button" aria-label="Remove tag @tag.Name" @onclick="() => RemoveTagAsync(tag.Name)">×</button>
                         </span>
                     }
                 </div>
                 @* Keys typed here must not drive the viewer (F, I, arrows...). *@
-                <input type="text" class="tag-input" list="lb-all-tags" placeholder="Add a tag and press Enter" aria-label="Add tag"
-                       @bind="_newTag" @bind:event="oninput" @onkeydown="OnTagKeyAsync" @onkeydown:stopPropagation="true" />
-                <datalist id="lb-all-tags">
-                    @foreach (var t in AllTags)
+                <input type="text" class="tag-input" list="lb-tag-suggestions" placeholder="Add a tag and press Enter" aria-label="Add tag"
+                       @bind="_newTag" @bind:event="oninput" @bind:after="SuggestAsync" @onkeydown="OnTagKeyAsync" @onkeydown:stopPropagation="true" />
+                <datalist id="lb-tag-suggestions">
+                    @foreach (var t in _suggestions)
                     {
                         <option value="@t.Name"></option>
                     }
@@ -154,16 +247,38 @@
     [Parameter, EditorRequired] public int[] Ids { get; set; } = [];
     [Parameter, EditorRequired] public int CurrentId { get; set; }
     [Parameter] public IReadOnlyList<Library> Libraries { get; set; } = [];
-    [Parameter] public IReadOnlyList<TagCount> AllTags { get; set; } = [];
+    /// <summary>Open straight into presentation mode (full screen, chrome hidden).</summary>
+    [Parameter] public bool Present { get; set; }
+    /// <summary>With <see cref="Present"/>: start with autoplay on.</summary>
+    [Parameter] public bool Autoplay { get; set; }
+
+    private const int SeekSeconds = 5;
+
+    // Loop is a viewing preference: on by default and remembered while the app runs. Presentation keeps its own
+    // switch, off at every start, so a looping video doesn't hold up autoplay unless asked to.
+    private static bool _loopInViewer = true;
+    private bool _loopInPresentation;
+    private bool _autoplay;
+    private CancellationTokenSource? _slideTimer;
+    private int _slideKey;
+
+    private bool Loop => _presenting ? _loopInPresentation : _loopInViewer;
+    private bool IsPlayableVideo => _item?.Kind == MediaKind.Video && !_videoFailed && (_item.Playable != false || _tryAnyway);
+    private int SlideSeconds => Gallery.GetSettings().SlideshowSeconds;
+    /// <summary>A tag was clicked: the gallery filters by it (and closes the viewer).</summary>
+    [Parameter] public EventCallback<string> OnTagClicked { get; set; }
     /// <summary>Receives the item shown last, so the grid can scroll to it.</summary>
     [Parameter] public EventCallback<int> OnClose { get; set; }
     [Parameter] public EventCallback<(int Id, bool Favorite)> OnFavoriteChanged { get; set; }
     [Parameter] public EventCallback OnTagsChanged { get; set; }
 
     private ElementReference _root, _stage;
-    private IJSObjectReference? _module, _zoom;
+    private IJSObjectReference? _module, _zoom, _presentation;
+    private bool _presenting;
     private MediaItem? _item;
-    private IReadOnlyList<string> _tags = [];
+    private IReadOnlyList<Tag> _tags = [];
+    private IReadOnlyList<TagCount> _suggestions = [];
+    private SidecarData? _sidecar;
     private IReadOnlyList<MediaItem> _neighbors = [];
     private string _newTag = "";
     private string? _error;
@@ -183,6 +298,12 @@
         {
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/MasonryGallery.UI/js/lightbox.js");
             _zoom = await _module.InvokeAsync<IJSObjectReference>("create", _stage);
+            if (Present)
+            {
+                _autoplay = Autoplay;
+                await SetPresentingAsync(true);
+                StateHasChanged();
+            }
         }
         if (!_focus) return;
         _focus = false;
@@ -195,6 +316,7 @@
         _pos = Array.IndexOf(Ids, id);
         _item = await Gallery.GetMediaAsync(id);
         _tags = _item is null ? [] : await Gallery.GetTagsAsync(id);
+        _sidecar = _item?.SidecarPath is null ? null : await Gallery.GetSidecarAsync(id);
         _videoFailed = _tryAnyway = false;
         _newTag = "";
         if (_zoom is not null) await _zoom.InvokeVoidAsync("reset");
@@ -206,6 +328,7 @@
                 neighbors.Add(n);
         }
         _neighbors = neighbors;
+        ScheduleSlide();
     }
 
     private async Task GoAsync(int delta)
@@ -215,7 +338,91 @@
         await LoadAsync(Ids[next]);
     }
 
+    // ── Autoplay and video controls ──
+
+    private void ToggleAutoplay()
+    {
+        _autoplay = !_autoplay;
+        ScheduleSlide();
+    }
+
+    private void ToggleLoop()
+    {
+        if (_presenting) _loopInPresentation = !_loopInPresentation;
+        else _loopInViewer = !_loopInViewer;
+        ScheduleSlide(); // a video that stops looping can end and move on, and vice versa
+    }
+
+    /// <summary>
+    /// Sets up the move to the next item: images (and videos that can't play) after the slideshow time;
+    /// playable videos when they end (<see cref="OnVideoEndedAsync"/>), never while looping.
+    /// Called after every change of item, so manual navigation restarts the countdown.
+    /// </summary>
+    private void ScheduleSlide()
+    {
+        _slideTimer?.Cancel();
+        _slideTimer = null;
+        if (!_autoplay || !_presenting || _item is null || IsPlayableVideo)
+            return;
+
+        var timer = _slideTimer = new CancellationTokenSource();
+        _slideKey++;
+        _ = Task.Delay(TimeSpan.FromSeconds(SlideSeconds), timer.Token).ContinueWith(t =>
+        {
+            if (!t.IsCanceled) _ = InvokeAsync(async () => { await AdvanceAsync(); StateHasChanged(); });
+        }, TaskScheduler.Default);
+    }
+
+    // Autoplay wraps around at the end; manual arrows stop at the ends.
+    private async Task AdvanceAsync()
+    {
+        if (!_autoplay || !_presenting || Ids.Length == 0) return;
+        await LoadAsync(Ids[(_pos + 1) % Ids.Length]);
+    }
+
+    private async Task OnVideoEndedAsync()
+    {
+        if (_autoplay && _presenting && !Loop)
+            await AdvanceAsync();
+    }
+
+    private void OnVideoError()
+    {
+        _videoFailed = true;
+        ScheduleSlide(); // now shown as a still: give it the image time
+    }
+
+    private async Task VideoAsync(string method, params object[] args)
+    {
+        if (_zoom is not null && IsPlayableVideo) await _zoom.InvokeVoidAsync(method, args);
+    }
+
     private Task CloseAsync() => OnClose.InvokeAsync(_loadedId);
+
+    private Task OnStageClickAsync() => _presenting ? Task.CompletedTask : CloseAsync();
+
+    // Full screen window, no chrome, media scaled up to fill the screen without cropping (see .presenting in app.css).
+    private async Task SetPresentingAsync(bool on)
+    {
+        if (on == _presenting) return;
+        _presenting = on;
+        if (on) _loopInPresentation = false; // each presentation starts with videos playing through
+        else _autoplay = false;
+        Window.SetFullScreen?.Invoke(on);
+        if (_zoom is not null) await _zoom.InvokeVoidAsync("reset");
+        if (on && _module is not null)
+        {
+            _presentation = await _module.InvokeAsync<IJSObjectReference>("present", _root);
+        }
+        else if (!on && _presentation is not null)
+        {
+            await _presentation.InvokeVoidAsync("dispose");
+            await _presentation.DisposeAsync();
+            _presentation = null;
+        }
+        _focus = true; // the exit button may have had focus; keys must keep reaching the viewer
+        ScheduleSlide();
+    }
 
     private async Task ToggleFavorite()
     {
@@ -231,8 +438,8 @@
         {
             var tag = _newTag.Trim();
             _newTag = "";
-            if (_tags.Contains(tag, StringComparer.OrdinalIgnoreCase)) return;
-            await SaveTagsAsync([.. _tags, tag]);
+            if (_tags.Any(t => string.Equals(t.Name, tag, StringComparison.OrdinalIgnoreCase))) return;
+            await SaveTagsAsync([.. UserTags, tag]);
         }
         else if (e.Key == "Escape")
         {
@@ -241,7 +448,38 @@
     }
 
     private Task RemoveTagAsync(string tag)
-        => SaveTagsAsync(_tags.Where(t => !string.Equals(t, tag, StringComparison.OrdinalIgnoreCase)).ToList());
+        => SaveTagsAsync(UserTags.Where(t => !string.Equals(t, tag, StringComparison.OrdinalIgnoreCase)).ToList());
+
+    private IEnumerable<string> UserTags => _tags.Where(t => !t.FromSidecar).Select(t => t.Name);
+
+    // Categories as the sidecar names them (Artist, Character...), alphabetical; plain keywords last.
+    private IEnumerable<IGrouping<string, Tag>> SidecarTagGroups => _tags
+        .Where(t => t.FromSidecar)
+        .GroupBy(t => t.Category ?? "")
+        .OrderBy(g => g.Key.Length == 0)
+        .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+        .Select(g => g.Key.Length > 0 ? g : new Grouping("Keywords", g));
+
+    private sealed class Grouping(string key, IEnumerable<Tag> tags) : IGrouping<string, Tag>
+    {
+        public string Key => key;
+        public IEnumerator<Tag> GetEnumerator() => tags.GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private async Task SuggestAsync()
+        => _suggestions = _newTag.Trim().Length == 0 ? [] : await Gallery.SearchTagsAsync(_newTag, 8);
+
+    private static bool IsWebLink(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
+
+    private static string Host(string url) => new Uri(url).Host;
+
+    private async Task OpenLink(string url)
+    {
+        var result = Gallery.OpenLink(url);
+        if (!result.IsSuccess) await ShowErrorAsync(result.Error!);
+    }
 
     private async Task SaveTagsAsync(IReadOnlyList<string> tags)
     {
@@ -275,9 +513,20 @@
 
     private async Task OnKey(KeyboardEventArgs e)
     {
+        if (e.CtrlKey || e.AltKey || e.MetaKey) return; // leave Ctrl+R, Alt+Left and the like alone
         switch (e.Key)
         {
+            case "Escape" when _presenting: await SetPresentingAsync(false); break;
             case "Escape": await CloseAsync(); break;
+            case "p" or "P" or "F11": await SetPresentingAsync(!_presenting); break;
+            case "a" or "A" when _presenting: ToggleAutoplay(); break;
+            case "a" or "A": _autoplay = true; await SetPresentingAsync(true); break;
+            case "r" or "R": ToggleLoop(); break;
+            case "k" or "K": await VideoAsync("togglePlay"); break;
+            case "j" or "J": await VideoAsync("seek", -SeekSeconds); break;
+            case "l" or "L": await VideoAsync("seek", SeekSeconds); break;
+            case "ArrowLeft" when e.ShiftKey: await VideoAsync("seek", -SeekSeconds); break;
+            case "ArrowRight" when e.ShiftKey: await VideoAsync("seek", SeekSeconds); break;
             case "ArrowLeft": await GoAsync(-1); break;
             case "ArrowRight": await GoAsync(1); break;
             case "f" or "F": await ToggleFavorite(); break;
@@ -319,8 +568,16 @@
     public async ValueTask DisposeAsync()
     {
         _errorTimer?.Cancel();
+        _slideTimer?.Cancel();
+        // Closing the viewer from presentation (e.g. the item was deleted) must not leave the window full screen.
+        if (_presenting) Window.SetFullScreen?.Invoke(false);
         try
         {
+            if (_presentation is not null)
+            {
+                await _presentation.InvokeVoidAsync("dispose");
+                await _presentation.DisposeAsync();
+            }
             if (_zoom is not null)
             {
                 await _zoom.InvokeVoidAsync("dispose");

@@ -83,18 +83,64 @@ export function create(stage) {
     stage.addEventListener('pointerup', onUp);
     stage.addEventListener('pointercancel', onUp);
 
+    const video = () => stage.querySelector('video');
+    function togglePlay() {
+        const v = video();
+        if (!v) return;
+        if (v.paused) v.play(); else v.pause();
+    }
+    // Space plays or pauses, unless a control has focus and handles Space itself (a focused video toggles natively).
+    const root = stage.closest('.lb') ?? stage;
+    const onKey = e => {
+        if (e.key !== ' ' || e.target.closest('button, video, input, textarea') || !video()) return;
+        e.preventDefault();
+        togglePlay();
+    };
+    root.addEventListener('keydown', onKey);
+
     return {
         reset,
+        togglePlay,
+        // Jump within the current video; clamped to its length.
+        seek(seconds) {
+            const v = video();
+            if (!v || !Number.isFinite(v.duration)) return;
+            v.currentTime = Math.min(v.duration, Math.max(0, v.currentTime + seconds));
+        },
         zoomBy(factor) { zoomAt(factor, ...centre()); },
         zoomIn() { zoomAt(STEP, ...centre()); },
         zoomOut() { zoomAt(1 / STEP, ...centre()); },
         dispose() {
+            root.removeEventListener('keydown', onKey);
             stage.removeEventListener('wheel', onWheel);
             stage.removeEventListener('dblclick', onDoubleClick);
             stage.removeEventListener('pointerdown', onDown);
             stage.removeEventListener('pointermove', onMove);
             stage.removeEventListener('pointerup', onUp);
             stage.removeEventListener('pointercancel', onUp);
+        }
+    };
+}
+
+// Presentation mode: controls and the pointer fade out after a moment without mouse movement.
+const IDLE_MS = 2500;
+
+export function present(root) {
+    let timer;
+    const wake = () => {
+        root.classList.remove('idle');
+        clearTimeout(timer);
+        timer = setTimeout(() => root.classList.add('idle'), IDLE_MS);
+    };
+    root.addEventListener('pointermove', wake);
+    root.addEventListener('pointerdown', wake);
+    wake();
+    return {
+        dispose() {
+            clearTimeout(timer);
+            root.removeEventListener('pointermove', wake);
+            root.removeEventListener('pointerdown', wake);
+            root.classList.remove('idle');
         }
     };
 }
