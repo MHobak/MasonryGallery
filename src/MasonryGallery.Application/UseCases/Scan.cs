@@ -36,6 +36,7 @@ public sealed class Scan : ILibraryScanner
     private readonly ViewportHint _viewport;
     private readonly ISettingsStore? _settings;
     private readonly ISidecarReader? _sidecars;
+    private readonly IndexingPause? _pause;
 
     public Scan(
         ILibraryRepository libraryRepository,
@@ -49,9 +50,11 @@ public sealed class Scan : ILibraryScanner
         ILogger<Scan> logger,
         ViewportHint? viewport = null,
         ISettingsStore? settings = null,
-        ISidecarReader? sidecars = null)
+        ISidecarReader? sidecars = null,
+        IndexingPause? pause = null)
     {
         _sidecars = sidecars;
+        _pause = pause;
         _viewport = viewport ?? new ViewportHint();
         _settings = settings;
         _libraryRepository = libraryRepository;
@@ -107,8 +110,12 @@ public sealed class Scan : ILibraryScanner
             _progress.ItemsChanged(); // the sweep may have removed rows
             await _libraryRepository.UpdateAsync(new Library(library.Name, library.RootPath)
             {
-                Id = libraryId, Enabled = library.Enabled, Status = LibraryStatus.Online,
-                FollowSymlinks = library.FollowSymlinks, LastScanId = scanId, LastScanUtc = _clock.UtcNow
+                Id = libraryId,
+                Enabled = library.Enabled,
+                Status = LibraryStatus.Online,
+                FollowSymlinks = library.FollowSymlinks,
+                LastScanId = scanId,
+                LastScanUtc = _clock.UtcNow
             }, ct);
             _progress.Report(new PipelineEvent("Up to date", 0, 0));
             return Result.Success();
@@ -239,7 +246,7 @@ public sealed class Scan : ILibraryScanner
         var slow = _fileEnumerator.IsNetworkPath(rootPath) || _fileEnumerator.IsRotationalDisk(rootPath);
         var workers = settings.Workers ?? (slow ? 2 : Math.Max(1, Environment.ProcessorCount - 1));
         var videoWorkers = Math.Min(settings.VideoWorkers ?? Math.Max(1, Environment.ProcessorCount / 2), workers);
-        return new IngestOptions(workers, videoWorkers, _viewport, settings.ThumbnailQuality, _sidecars);
+        return new IngestOptions(workers, videoWorkers, _viewport, settings.ThumbnailQuality, _sidecars, _pause);
     }
 
     // Only after rows were permanently deleted can thumbnails become orphaned, so the walk is rare.

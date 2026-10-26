@@ -1,7 +1,6 @@
 namespace MasonryGallery.Infrastructure.Tests;
 
 using FluentAssertions;
-using Xunit;
 using MasonryGallery.Application.Pipeline;
 using MasonryGallery.Application.Ports;
 using MasonryGallery.Application.UseCases;
@@ -12,6 +11,7 @@ using MasonryGallery.Infrastructure.Persistence;
 using MasonryGallery.Infrastructure.Thumbnails;
 using Microsoft.Extensions.Logging.Abstractions;
 using SkiaSharp;
+using Xunit;
 
 public sealed class ScanEndToEndTests : IDisposable
 {

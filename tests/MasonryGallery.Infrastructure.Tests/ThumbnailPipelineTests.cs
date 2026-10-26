@@ -79,11 +79,45 @@ public sealed class ThumbnailPipelineTests : IDisposable
         return new Rig(library, media, libs, store);
     }
 
-    private static Task RunAsync(Rig rig, IThumbnailGenerator generator, ViewportHint viewport, CancellationToken ct = default)
+    private static Task RunAsync(Rig rig, IThumbnailGenerator generator, ViewportHint viewport, CancellationToken ct = default,
+        IndexingPause? pause = null)
         => new IngestPipeline(NullLogger.Instance).RunAsync(rig.Library,
             new FileSystemEnumerator(NullLogger<FileSystemEnumerator>.Instance).EnumerateAsync(rig.Library.RootPath, false, ct), rig.Media,
             new SkiaProbe(NullLogger<SkiaProbe>.Instance), generator, rig.Store, scanId: 99,
-            new IngestOptions(Workers: 1, VideoWorkers: 1, viewport), new PipelineProgressReporter(), ct);
+            new IngestOptions(Workers: 1, VideoWorkers: 1, viewport, Pause: pause), new PipelineProgressReporter(), ct);
+
+    [Fact]
+    public async Task Paused_indexing_makes_no_thumbnails_until_resumed()
+    {
+        var rig = await SetupAsync(3);
+        var pause = new IndexingPause();
+        pause.Pause();
+        var generator = new FakeGenerator((_, _) => false);
+
+        var run = RunAsync(rig, generator, new ViewportHint(), pause: pause);
+        await Task.Delay(500);
+        run.IsCompleted.Should().BeFalse();
+        generator.Generated.Should().BeEmpty();
+
+        pause.Resume();
+        await run.WaitAsync(TimeSpan.FromSeconds(10));
+        generator.Generated.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task A_paused_scan_can_still_be_cancelled()
+    {
+        var rig = await SetupAsync(2);
+        var pause = new IndexingPause();
+        pause.Pause();
+        using var cts = new CancellationTokenSource();
+
+        var run = RunAsync(rig, new FakeGenerator((_, _) => false), new ViewportHint(), cts.Token, pause);
+        await Task.Delay(200);
+        await cts.CancelAsync();
+
+        await run.Invoking(r => r.WaitAsync(TimeSpan.FromSeconds(5))).Should().ThrowAsync<OperationCanceledException>();
+    }
 
     [Fact]
     public async Task On_screen_items_go_first_then_newest_first()

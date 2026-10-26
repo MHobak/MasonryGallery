@@ -32,9 +32,18 @@ public sealed class GalleryQueryTests : IDisposable
 
         MediaItem Item(LibraryId lib, string name, int month, MediaKind kind = MediaKind.Image) => new()
         {
-            LibraryId = lib, RelPath = "2024/" + name, FileName = name, Kind = kind, SizeBytes = 10,
-            ModifiedUtc = Jan, DateTaken = Jan.AddMonths(month), DateAdded = Jan.AddMonths(-month),
-            Width = 4, Height = 3, ProbeState = ProbeState.Done, ScanId = 1
+            LibraryId = lib,
+            RelPath = "2024/" + name,
+            FileName = name,
+            Kind = kind,
+            SizeBytes = 10,
+            ModifiedUtc = Jan,
+            DateTaken = Jan.AddMonths(month),
+            DateAdded = Jan.AddMonths(-month),
+            Width = 4,
+            Height = 3,
+            ProbeState = ProbeState.Done,
+            ScanId = 1
         };
         await _media.UpsertBatchAsync([
             Item(_photos, "beach.jpg", 0), Item(_photos, "cat.png", 1), Item(_photos, "party.mp4", 2, MediaKind.Video),
@@ -57,8 +66,17 @@ public sealed class GalleryQueryTests : IDisposable
         await SeedAsync();
         MediaItem At(string relPath) => new()
         {
-            LibraryId = _other, RelPath = relPath, FileName = Path.GetFileName(relPath), Kind = MediaKind.Video, SizeBytes = 1,
-            ModifiedUtc = Jan, DateTaken = Jan, Width = 16, Height = 9, ProbeState = ProbeState.Done, ScanId = 1
+            LibraryId = _other,
+            RelPath = relPath,
+            FileName = Path.GetFileName(relPath),
+            Kind = MediaKind.Video,
+            SizeBytes = 1,
+            ModifiedUtc = Jan,
+            DateTaken = Jan,
+            Width = 16,
+            Height = 9,
+            ProbeState = ProbeState.Done,
+            ScanId = 1
         };
         await _media.UpsertBatchAsync([
             At("youtube/IdiotsKPOP/8f14e45fceea167a5a36dedd4bea2543.webm"),
@@ -82,6 +100,35 @@ public sealed class GalleryQueryTests : IDisposable
         }
         (await NamesAsync(new MediaFilter(Search: "tzuyu"))).Should().BeEmpty();
         (await NamesAsync(new MediaFilter(Search: "sana_d"))).Should().Equal("1029384756.webm");
+    }
+
+    [Fact]
+    public async Task Search_matches_composed_and_decomposed_spellings()
+    {
+        await SeedAsync();
+        MediaItem At(string relPath) => new()
+        {
+            LibraryId = _other,
+            RelPath = relPath,
+            FileName = Path.GetFileName(relPath),
+            Kind = MediaKind.Image,
+            SizeBytes = 1,
+            ModifiedUtc = Jan,
+            DateTaken = Jan,
+            Width = 4,
+            Height = 3,
+            ProbeState = ProbeState.Done,
+            ScanId = 1
+        };
+        // As copied from macOS: "é" as e + combining accent, Hangul syllables split into jamo.
+        await _media.UpsertBatchAsync([
+            At("Caf\u0065\u0301 Paris/1.jpg".Normalize(NormalizationForm.FormD)),
+            At("카리나 직캠/2.jpg".Normalize(NormalizationForm.FormD)),
+            At("Ré/3.jpg")]); // composed, as Linux and Windows tools usually write it
+
+        (await NamesAsync(new MediaFilter(Search: "café"))).Should().Equal("1.jpg");
+        (await NamesAsync(new MediaFilter(Search: "카리나"))).Should().Equal("2.jpg");
+        (await NamesAsync(new MediaFilter(Search: "R\u0065\u0301"))).Should().Equal(["3.jpg"], "short terms too, typed decomposed");
     }
 
     [Fact]

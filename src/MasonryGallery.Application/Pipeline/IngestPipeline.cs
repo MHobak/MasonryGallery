@@ -10,8 +10,9 @@ using Microsoft.Extensions.Logging;
 /// <param name="Viewport">On-screen IDs, served first by the thumbnail stage.</param>
 /// <param name="Quality">WebP quality of generated thumbnails.</param>
 /// <param name="Sidecars">Reads XMP sidecars during the probe stage; null skips them.</param>
+/// <param name="Pause">The user's pause switch; probe and thumbnail workers wait on it before each item.</param>
 public sealed record IngestOptions(int Workers, int VideoWorkers, ViewportHint Viewport, int Quality = ThumbnailFormat.DefaultQuality,
-    ISidecarReader? Sidecars = null);
+    ISidecarReader? Sidecars = null, IndexingPause? Pause = null);
 
 public sealed class IngestPipeline : IDisposable
 {
@@ -195,6 +196,7 @@ public sealed class IngestPipeline : IDisposable
             new ParallelOptions { MaxDegreeOfParallelism = options.Workers, CancellationToken = ct },
             async (item, token) =>
             {
+                if (options.Pause is { } pause) await pause.WaitWhilePausedAsync(token);
                 var metadata = await GatedAsync(item.Kind, videoGate,
                     () => mediaProbe.ProbeAsync(Path.Combine(rootPath, item.RelPath), item.Kind, token).AsTask(), token);
 
@@ -286,6 +288,7 @@ public sealed class IngestPipeline : IDisposable
         {
             await foreach (var item in queue.Reader.ReadAllAsync(stages.Token))
             {
+                if (options.Pause is { } pause) await pause.WaitWhilePausedAsync(stages.Token);
                 await GenerateThumbnailAsync(library, item, thumbnailGenerator, thumbnailStore, mediaRepository, progress, videoGate, options.Quality, stages.Token);
                 var n = Interlocked.Increment(ref done);
                 if (n >= total || throttle.Due())

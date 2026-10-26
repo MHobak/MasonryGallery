@@ -142,7 +142,7 @@
         <footer class="status" aria-live="polite">
             @if (_status is { } st)
             {
-                <span class="msg">@st.Message@(st.Total > 0 ? $"  {st.Completed:N0} / {st.Total:N0}" : "")</span>
+                <span class="msg">@(Gallery.IsIndexingPaused ? "Paused: " : "")@st.Message@(st.Total > 0 ? $"  {st.Completed:N0} / {st.Total:N0}" : "")</span>
                 @if (!st.Message.StartsWith("Scan failed"))
                 {
                     <span class="meter @(st.Total == 0 ? "busy" : "")"><i style="width:@(st.Total > 0 ? st.Completed * 100 / st.Total : 100)%"></i></span>
@@ -160,6 +160,14 @@
             @if (_failedCount > 0)
             {
                 <button type="button" class="warn" disabled="@Mode.IsViewer" @onclick="() => _panel = true">@_failedCount.ToString("N0") @(_failedCount == 1 ? "file" : "files") couldn't be read</button>
+            }
+            @if (Gallery.CanPauseIndexing && (Gallery.IsBusy || Gallery.IsIndexingPaused))
+            {
+                <button type="button" class="btn small" aria-pressed="@Bool(Gallery.IsIndexingPaused)"
+                        title="@(Gallery.IsIndexingPaused ? "Continue reading files and making thumbnails" : "Stop reading files and making thumbnails until you continue")"
+                        @onclick="() => Gallery.SetIndexingPaused(!Gallery.IsIndexingPaused)">
+                    @(Gallery.IsIndexingPaused ? "Resume" : "Pause")
+                </button>
             }
             <span class="count">@_count.ToString("N0") @(_count == 1 ? "item" : "items")</span>
         </footer>

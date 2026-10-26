@@ -127,7 +127,8 @@ try
             .AddSingleton<ILibraryScanner>(sp => sp.GetRequiredService<Scan>())
             .AddSingleton<ScanScheduler>()
             .AddSingleton<LibraryMonitor>()
-            .AddSingleton<CacheJanitor>();
+            .AddSingleton<CacheJanitor>()
+            .AddSingleton<IndexingPause>();
     }
 
     appBuilder.RootComponents.Add<App>("#app");

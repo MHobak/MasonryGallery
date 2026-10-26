@@ -34,7 +34,9 @@ public sealed class DatabaseChangePoller : IDisposable
             // Private cache: in shared-cache mode, commits by connections sharing the cache don't move data_version.
             await using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
             {
-                DataSource = _dbPath, Mode = SqliteOpenMode.ReadOnly, Cache = SqliteCacheMode.Private
+                DataSource = _dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Cache = SqliteCacheMode.Private
             }.ToString());
             await conn.OpenAsync(ct);
             var last = await conn.ExecuteScalarAsync<long>("PRAGMA data_version");

@@ -9,5 +9,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MasonryGallery.Application\MasonryGallery.Application.csproj" />
+    <ProjectReference Include="..\..\src\MasonryGallery.Infrastructure\MasonryGallery.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

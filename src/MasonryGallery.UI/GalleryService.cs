@@ -1,8 +1,8 @@
 namespace MasonryGallery.UI;
 
 using System.Diagnostics;
-using MasonryGallery.Application.Ports;
 using MasonryGallery.Application.Pipeline;
+using MasonryGallery.Application.Ports;
 using MasonryGallery.Application.Settings;
 using MasonryGallery.Application.UseCases;
 using MasonryGallery.Domain;
@@ -29,6 +29,7 @@ public sealed class GalleryService : IDisposable
 
     private readonly ScanScheduler? _scheduler;
     private readonly LibraryMonitor? _monitor;
+    private readonly IndexingPause? _pause;
 
     public GalleryService(IServiceProvider sp,
         MediaEndpoint endpoint,
@@ -36,7 +37,8 @@ public sealed class GalleryService : IDisposable
         ILogger<GalleryService>? logger = null,
         IProgressReporter? progressReporter = null,
         ScanScheduler? scheduler = null,
-        LibraryMonitor? monitor = null)
+        LibraryMonitor? monitor = null,
+        IndexingPause? pause = null)
     {
         _sp = sp;
         Endpoint = endpoint;
@@ -54,8 +56,9 @@ public sealed class GalleryService : IDisposable
             scheduler.Completed += OnScanCompleted;
             scheduler.BusyChanged += OnBusyChanged;
         }
-        if (monitor is not null)
-            monitor.StatusChanged += OnWatchStatusChanged;
+        monitor?.StatusChanged += OnWatchStatusChanged;
+        _pause = pause;
+        pause?.Changed += OnBusyChanged;
     }
 
     // Handlers marshal to the UI thread, and Photino's dispatch blocks the caller until the UI thread has run it.
@@ -79,6 +82,18 @@ public sealed class GalleryService : IDisposable
 
     /// <summary>True while any library is being scanned.</summary>
     public bool IsBusy => _scheduler?.IsBusy ?? false;
+
+    /// <summary>Whether indexing can be paused here (only the main window indexes).</summary>
+    public bool CanPauseIndexing => _pause is not null;
+
+    /// <summary>Probe and thumbnail work waits; <see cref="BusyChanged"/> fires when this changes.</summary>
+    public bool IsIndexingPaused => _pause?.IsPaused ?? false;
+
+    public void SetIndexingPaused(bool paused)
+    {
+        if (paused) _pause?.Pause();
+        else _pause?.Resume();
+    }
 
     /// <summary>How each enabled library is kept current: watched live, polled, or not at the moment.</summary>
     public IReadOnlyDictionary<LibraryId, WatchStatus> WatchStatuses
@@ -128,8 +143,12 @@ public sealed class GalleryService : IDisposable
         using var scope = _sp.CreateScope();
         return await Get<ILibraryRepository>(scope).UpdateAsync(new Library(library.Name, library.RootPath)
         {
-            Id = library.Id, Enabled = enabled, FollowSymlinks = followSymlinks, Status = library.Status,
-            LastScanId = library.LastScanId, LastScanUtc = library.LastScanUtc
+            Id = library.Id,
+            Enabled = enabled,
+            FollowSymlinks = followSymlinks,
+            Status = library.Status,
+            LastScanId = library.LastScanId,
+            LastScanUtc = library.LastScanUtc
         }, ct);
     }
 
@@ -314,7 +333,7 @@ public sealed class GalleryService : IDisposable
             _scheduler.Completed -= OnScanCompleted;
             _scheduler.BusyChanged -= OnBusyChanged;
         }
-        if (_monitor is not null)
-            _monitor.StatusChanged -= OnWatchStatusChanged;
+        _monitor?.StatusChanged -= OnWatchStatusChanged;
+        _pause?.Changed -= OnBusyChanged;
     }
 }

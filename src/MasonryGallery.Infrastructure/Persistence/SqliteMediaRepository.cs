@@ -136,18 +136,27 @@ public sealed class SqliteMediaRepository : IMediaRepository
         var terms = (search ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         for (var i = 0; i < terms.Length; i++)
         {
-            var quoted = "\"" + terms[i].Replace("\"", "\"\"") + "\"";
-            if (terms[i].EnumerateRunes().Count() >= 3)
-            {
-                sql.Append($" AND m.Id IN (SELECT rowid FROM MediaPathFts WHERE MediaPathFts MATCH @Search{i})");
-                args.Add($"Search{i}", quoted);
-            }
-            else
-            {
-                sql.Append($" AND m.Id IN (SELECT rowid FROM MediaFts WHERE MediaFts MATCH @Search{i})");
-                args.Add($"Search{i}", quoted + "*");
-            }
+            // The two spellings can differ in length ("é" is one character or two), so each picks its own index.
+            var byTable = UnicodeForms(terms[i])
+                .GroupBy(f => f.EnumerateRunes().Count() >= 3 ? "MediaPathFts" : "MediaFts")
+                .Select((g, j) =>
+                {
+                    var suffix = g.Key == "MediaFts" ? "*" : "";
+                    args.Add($"Search{i}_{j}", string.Join(" OR ", g.Select(f => "\"" + f.Replace("\"", "\"\"") + "\"" + suffix)));
+                    return $"m.Id IN (SELECT rowid FROM {g.Key} WHERE {g.Key} MATCH @Search{i}_{j})";
+                });
+            sql.Append($" AND ({string.Join(" OR ", byTable)})");
         }
+    }
+
+    // File names keep the exact bytes they have on disk (they must, to be opened), and those bytes may be composed
+    // ("é", what keyboards type) or decomposed ("e" + accent, how macOS stores names; it also splits Hangul syllables
+    // into jamo). Searching for both spellings finds the file whichever way its name was written.
+    internal static IEnumerable<string> UnicodeForms(string term)
+    {
+        var composed = term.Normalize(NormalizationForm.FormC);
+        var decomposed = term.Normalize(NormalizationForm.FormD);
+        return composed == decomposed ? [composed] : [composed, decomposed];
     }
 
     public async Task<MediaItem?> GetByIdAsync(int id, CancellationToken ct = default)
@@ -349,7 +358,12 @@ public sealed class SqliteMediaRepository : IMediaRepository
               VALUES (@MediaId, @Creator, @Source, @Title, @Description, @Rating)",
             present.Select(s => new
             {
-                MediaId = ids[s.RelPath], s.Data!.Creator, s.Data.Source, s.Data.Title, s.Data.Description, s.Data.Rating
+                MediaId = ids[s.RelPath],
+                s.Data!.Creator,
+                s.Data.Source,
+                s.Data.Title,
+                s.Data.Description,
+                s.Data.Rating
             }), trans);
 
         if (previous.Count > 0)

@@ -7,6 +7,58 @@ const ID = 0, W = 1, H = 2, KIND = 3, READY = 4, RGB = 5, FAV = 6;
 const HINT_DELAY = 200;  // ms of scroll quiet before telling the indexer what is on screen
 const NAMES_DELAY = 150; // ms to batch file-name lookups for new tiles
 
+/** Columns for a container width: tiles stay roughly 150-250 px wide. */
+export function columnCount(width) {
+    const target = width < 520 ? 150 : width < 900 ? 200 : 250;
+    return Math.max(1, Math.floor((width + GAP) / (target + GAP)));
+}
+
+/**
+ * The masonry layout as a pure function of the item sizes and the container width: each item goes into the
+ * shortest column so far. Aspect ratios are clamped to 1:2..2:1 so panoramas and strips stay usable.
+ * Returns positions per item, each column's items top to bottom, and the total height.
+ */
+export function computeLayout(flat, width) {
+    const n = flat.length / STRIDE;
+    const c = columnCount(width);
+    const colW = (width - GAP * (c - 1)) / c;
+    const heights = new Float64Array(c);
+    const xs = new Float32Array(n), ys = new Float32Array(n), hs = new Float32Array(n);
+    const columns = Array.from({ length: c }, () => []);
+
+    for (let i = 0; i < n; i++) {
+        const w = Math.max(1, flat[i * STRIDE + W]);
+        const h = Math.max(1, flat[i * STRIDE + H]);
+        const ratio = Math.min(2, Math.max(0.5, h / w));
+        let k = 0;
+        for (let j = 1; j < c; j++) if (heights[j] < heights[k]) k = j;
+        xs[i] = k * (colW + GAP);
+        ys[i] = heights[k];
+        hs[i] = colW * ratio;
+        heights[k] += hs[i] + GAP;
+        columns[k].push(i);
+    }
+    return { colW, xs, ys, hs, columns, height: heights.reduce((a, b) => Math.max(a, b), 0) };
+}
+
+/**
+ * Items that intersect [top, bottom]: per column, a binary search for the first one reaching below `top`
+ * (a column's items are sorted by y), then a walk until one starts below `bottom`.
+ */
+export function visibleItems(geometry, top, bottom) {
+    const { ys, hs, columns } = geometry;
+    const found = new Set();
+    for (const list of columns) {
+        let lo = 0, hi = list.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (ys[list[mid]] + hs[list[mid]] < top) lo = mid + 1; else hi = mid;
+        }
+        for (let p = lo; p < list.length && ys[list[p]] <= bottom; p++) found.add(list[p]);
+    }
+    return found;
+}
+
 // token: per-launch secret the media server requires on every request.
 export function create(host, dotnet, mediaBase, token) {
     const spacer = document.createElement('div');
@@ -30,36 +82,12 @@ export function create(host, dotnet, mediaBase, token) {
     const count = () => flat.length / STRIDE;
     const at = (i, field) => flat[i * STRIDE + field];
 
-    function columnCount(w) {
-        const target = w < 520 ? 150 : w < 900 ? 200 : 250;
-        return Math.max(1, Math.floor((w + GAP) / (target + GAP)));
-    }
-
     function layout() {
         width = host.clientWidth;
         if (!width) return;
-        const n = count();
-        const c = columnCount(width);
-        colW = (width - GAP * (c - 1)) / c;
-        const heights = new Float64Array(c);
-        xs = new Float32Array(n);
-        ys = new Float32Array(n);
-        hs = new Float32Array(n);
-        columns = Array.from({ length: c }, () => []);
-
-        for (let i = 0; i < n; i++) {
-            const w = Math.max(1, at(i, W));
-            const h = Math.max(1, at(i, H));
-            const ratio = Math.min(2, Math.max(0.5, h / w));
-            let k = 0;
-            for (let j = 1; j < c; j++) if (heights[j] < heights[k]) k = j;
-            xs[i] = k * (colW + GAP);
-            ys[i] = heights[k];
-            hs[i] = colW * ratio;
-            heights[k] += hs[i] + GAP;
-            columns[k].push(i);
-        }
-        spacer.style.height = heights.reduce((a, b) => Math.max(a, b), 0) + 'px';
+        const geometry = computeLayout(flat, width);
+        ({ colW, xs, ys, hs, columns } = geometry);
+        spacer.style.height = geometry.height + 'px';
     }
 
     function addImage(el, id) {
@@ -137,24 +165,12 @@ export function create(host, dotnet, mediaBase, token) {
         host.appendChild(el);
     }
 
-    function firstVisible(list, top) {
-        let lo = 0, hi = list.length;
-        while (lo < hi) {
-            const mid = (lo + hi) >> 1;
-            if (ys[list[mid]] + hs[list[mid]] < top) lo = mid + 1; else hi = mid;
-        }
-        return lo;
-    }
-
     function render() {
         frame = 0;
         if (!xs) return;
         const top = host.scrollTop - BUFFER;
         const bottom = host.scrollTop + host.clientHeight + BUFFER;
-        const want = new Set();
-        for (const list of columns) {
-            for (let p = firstVisible(list, top); p < list.length && ys[list[p]] <= bottom; p++) want.add(list[p]);
-        }
+        const want = visibleItems({ ys, hs, columns }, top, bottom);
         for (const [i, el] of tiles) {
             if (!want.has(i)) { el.remove(); tiles.delete(i); }
         }

@@ -82,8 +82,7 @@ public sealed class LibraryMonitor : IDisposable
         _options = options ?? MonitorOptions.Default;
         _scheduler.Completed += OnScanCompleted;
         _settings = settings;
-        if (_settings is not null)
-            _settings.Changed += OnSettingsChanged;
+        _settings?.Changed += OnSettingsChanged;
     }
 
     // Changed patterns can hide files that are indexed or reveal ones that aren't; only a full walk settles both.
@@ -321,8 +320,7 @@ public sealed class LibraryMonitor : IDisposable
     {
         _stop.Cancel();
         _scheduler.Completed -= OnScanCompleted;
-        if (_settings is not null)
-            _settings.Changed -= OnSettingsChanged;
+        _settings?.Changed -= OnSettingsChanged;
         List<Entry> released;
         lock (_lock)
         {

@@ -10,7 +10,8 @@ end_of_line = lf
 dotnet_sort_system_directives_first = true
 csharp_preferred_modifier_order = newest_to_oldest: warning
 csharp_style_namespace_declarations = file_scoped: warning
-csharp_style_expression_bodied_methods = false: warning
+# Both forms are used throughout: arrows for one-expression members, blocks for the rest.
+csharp_style_expression_bodied_methods = true: silent
 csharp_style_expression_bodied_constructors = never: warning
 csharp_style_expression_bodied_properties = when_on_single_line: warning
 csharp_style_expression_bodied_indexers = when_on_single_line: warning

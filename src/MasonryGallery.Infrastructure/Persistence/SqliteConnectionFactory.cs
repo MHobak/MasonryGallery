@@ -25,7 +25,7 @@ public sealed class SqliteConnectionFactory
         {
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared
+            Cache = SqliteCacheMode.Private
         }.ToString();
         _logger = logger;
     }

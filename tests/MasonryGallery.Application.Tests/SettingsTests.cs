@@ -25,7 +25,10 @@ public class AppSettingsTests
     {
         var result = new AppSettings
         {
-            Workers = workers, VideoWorkers = video, ThumbnailQuality = quality, PreviewCacheLimitMb = cacheMb
+            Workers = workers,
+            VideoWorkers = video,
+            ThumbnailQuality = quality,
+            PreviewCacheLimitMb = cacheMb
         }.Validate();
 
         result.IsSuccess.Should().BeFalse();

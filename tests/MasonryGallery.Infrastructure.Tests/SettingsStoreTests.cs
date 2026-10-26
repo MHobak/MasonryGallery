@@ -4,11 +4,11 @@ using System.Text.Json.Nodes;
 using FluentAssertions;
 using MasonryGallery.Application.Ports;
 using MasonryGallery.Application.Settings;
+using MasonryGallery.Domain;
 using MasonryGallery.Infrastructure.FileSystem;
 using MasonryGallery.Infrastructure.Settings;
 using MasonryGallery.Infrastructure.Thumbnails;
 using Microsoft.Extensions.Logging.Abstractions;
-using MasonryGallery.Domain;
 using Xunit;
 
 internal sealed class FixedSettings(AppSettings settings) : ISettingsStore

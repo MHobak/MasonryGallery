@@ -8,6 +8,16 @@ using SkiaSharp;
 
 public sealed class SkiaThumbnailGenerator : IThumbnailGenerator
 {
+    // A decoded pixel is 4 bytes. The header of a tiny file can claim 100,000 x 100,000 pixels (40 GB); never
+    // allocate for more than this. JPEGs decode scaled (1/8 of a 100 MP photo is 1.6 MP), so this only refuses
+    // other formats that big.
+    internal const long MaxDecodePixels = 100_000_000;
+
+    // Decodes above this size (64 MB+) run one at a time, so a burst of huge PNGs on many workers can't
+    // each take hundreds of megabytes at once (design §10: decode concurrency capped by memory).
+    private const long LargeDecodePixels = 16_000_000;
+    private static readonly SemaphoreSlim LargeDecodes = new(1, 1);
+
     private readonly ILogger<SkiaThumbnailGenerator> _logger;
 
     public SkiaThumbnailGenerator(ILogger<SkiaThumbnailGenerator> logger)
@@ -34,7 +44,10 @@ public sealed class SkiaThumbnailGenerator : IThumbnailGenerator
 
             using var decoded = DecodeScaled(codec, longEdge);
             if (decoded == null)
-                return Result<ThumbnailImage>.Failure("Cannot decode image");
+                return Result<ThumbnailImage>.Failure(
+                    (long)codec.Info.Width * codec.Info.Height > MaxDecodePixels
+                        ? $"Image is too large to preview ({codec.Info.Width} x {codec.Info.Height})"
+                        : "Cannot decode image");
 
             return ThumbnailEncoder.Encode(decoded, codec.EncodedOrigin, longEdge, job.Quality);
         }
@@ -64,14 +77,32 @@ public sealed class SkiaThumbnailGenerator : IThumbnailGenerator
 
         foreach (var size in sizes.Distinct())
         {
-            var target = new SKImageInfo(size.Width, size.Height, SKImageInfo.PlatformColorType,
-                info.AlphaType == SKAlphaType.Opaque ? SKAlphaType.Opaque : SKAlphaType.Premul);
-            var bitmap = new SKBitmap(target);
-            var result = codec.GetPixels(target, bitmap.GetPixels());
-            // A truncated file still yields a usable picture.
-            if (result is SKCodecResult.Success or SKCodecResult.IncompleteInput)
-                return bitmap;
-            bitmap.Dispose();
+            var pixels = (long)size.Width * size.Height;
+            if (pixels > MaxDecodePixels)
+                continue;
+            var large = pixels > LargeDecodePixels;
+            if (large) LargeDecodes.Wait();
+            try
+            {
+                var target = new SKImageInfo(size.Width, size.Height, SKImageInfo.PlatformColorType,
+                    info.AlphaType == SKAlphaType.Opaque ? SKAlphaType.Opaque : SKAlphaType.Premul);
+                var bitmap = new SKBitmap(target);
+                // Allocation can still fail (memory pressure); a null buffer must never reach the decoder.
+                if (bitmap.GetPixels() == IntPtr.Zero)
+                {
+                    bitmap.Dispose();
+                    continue;
+                }
+                var result = codec.GetPixels(target, bitmap.GetPixels());
+                // A truncated file still yields a usable picture.
+                if (result is SKCodecResult.Success or SKCodecResult.IncompleteInput)
+                    return bitmap;
+                bitmap.Dispose();
+            }
+            finally
+            {
+                if (large) LargeDecodes.Release();
+            }
         }
         return null;
     }
