@@ -75,15 +75,15 @@
             }
             @if (_libraries.Count > 1)
             {
-                <label>Library
-                    <select class="select" @onchange="OnLibrary">
-                        <option value="" selected="@(_filter.LibraryId is null)">All libraries</option>
-                        @foreach (var l in _libraries.Where(l => l.Enabled))
-                        {
-                            <option value="@l.Id.Value" selected="@(_filter.LibraryId == l.Id)">@l.Name</option>
-                        }
-                    </select>
-                </label>
+                <div class="chips library-chips" role="group" aria-label="Filter by library">
+                    <button type="button" class="chip" aria-pressed="@Bool(_filter.LibraryIds is not { Count: > 0 })"
+                            @onclick="() => ApplyAsync(_filter with { LibraryIds = null })">All libraries</button>
+                    @foreach (var l in _libraries.Where(l => l.Enabled))
+                    {
+                        <button type="button" class="chip" title="@l.Name" aria-pressed="@Bool(_filter.LibraryIds?.Contains(l.Id) == true)"
+                                @onclick="() => ToggleLibraryAsync(l.Id)">@l.Name</button>
+                    }
+                </div>
             }
             <label>From <input type="date" class="select" @bind="_from" @bind:after="OnDatesAsync" /></label>
             <label>To <input type="date" class="select" @bind="_to" @bind:after="OnDatesAsync" /></label>
@@ -216,7 +216,7 @@
     private int Polled => Gallery.WatchStatuses.Values.Count(s => s.Mode == WatchMode.Polling);
 
     private int ExtraFilterCount =>
-        (_filter.Sort != MediaSort.NewestFirst ? 1 : 0) + (_filter.LibraryId is not null ? 1 : 0)
+        (_filter.Sort != MediaSort.NewestFirst ? 1 : 0) + (_filter.LibraryIds is { Count: > 0 } ? 1 : 0)
         + TagFilterCount + (_filter.From is not null ? 1 : 0) + (_filter.To is not null ? 1 : 0);
 
     private int TagFilterCount => (_filter.Tags?.Count ?? 0) + (_filter.ExcludedTags?.Count ?? 0);
@@ -375,8 +375,11 @@
     private Task SortAsync(MediaSort sort)
         => ApplyAsync(_filter with { Sort = sort, Seed = sort == MediaSort.Random ? Random.Shared.Next() : 0 });
 
-    private Task OnLibrary(ChangeEventArgs e)
-        => ApplyAsync(_filter with { LibraryId = int.TryParse(e.Value?.ToString(), out var v) ? new LibraryId(v) : null });
+    private Task ToggleLibraryAsync(LibraryId id)
+    {
+        var ids = _filter.LibraryIds ?? [];
+        return ApplyAsync(_filter with { LibraryIds = ids.Contains(id) ? ids.Where(x => x != id).ToList() : [.. ids, id] });
+    }
 
     // Inclusive local calendar days, stored as UTC instants.
     private Task OnDatesAsync() => ApplyAsync(_filter with
@@ -436,8 +439,9 @@
         await Gallery.LibrariesChangedAsync();
         _libraries = await Gallery.GetLibrariesAsync();
         _failedCount = await Gallery.CountFailedAsync();
-        if (_filter.LibraryId is { } selected && !_libraries.Any(l => l.Id == selected && l.Enabled))
-            _filter = _filter with { LibraryId = null };
+        // Drop libraries that were removed or hidden; an empty list falls back to all.
+        if (_filter.LibraryIds is { Count: > 0 } selected)
+            _filter = _filter with { LibraryIds = selected.Where(id => _libraries.Any(l => l.Id == id && l.Enabled)).ToList() };
         await RefreshAsync(keepPosition: true);
     }
 

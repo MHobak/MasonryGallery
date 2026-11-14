@@ -61,6 +61,15 @@ public sealed class GalleryQueryTests : IDisposable
         => (await _media.GetLayoutItemsAsync(new MediaFilter(Search: Path.GetFileNameWithoutExtension(name)))).Single().Id;
 
     [Fact]
+    public async Task Library_filter_matches_any_of_the_selected_libraries()
+    {
+        await SeedAsync();
+
+        (await NamesAsync(new MediaFilter(LibraryIds: [_photos, _other]))).Should().HaveCount(4);
+        (await NamesAsync(new MediaFilter(LibraryIds: []))).Should().HaveCount(4, "an empty selection means all");
+    }
+
+    [Fact]
     public async Task Search_finds_text_anywhere_in_folder_and_file_names()
     {
         await SeedAsync();
@@ -145,7 +154,7 @@ public sealed class GalleryQueryTests : IDisposable
             orders.Add(string.Join(",", await NamesAsync(new MediaFilter(Sort: MediaSort.Random, Seed: seed))));
         orders.Count.Should().BeGreaterThan(5, "different seeds give different orders");
 
-        (await NamesAsync(new MediaFilter(Kind: MediaKind.Image, LibraryId: _photos, Sort: MediaSort.Random, Seed: 3)))
+        (await NamesAsync(new MediaFilter(Kind: MediaKind.Image, LibraryIds: [_photos], Sort: MediaSort.Random, Seed: 3)))
             .Should().BeEquivalentTo("beach.jpg", "cat.png");
     }
 
@@ -166,7 +175,7 @@ public sealed class GalleryQueryTests : IDisposable
 
         (await NamesAsync(new MediaFilter())).Should().Equal("zebra.jpg", "party.mp4", "cat.png", "beach.jpg");
         (await NamesAsync(new MediaFilter(Kind: MediaKind.Video))).Should().Equal("party.mp4");
-        (await NamesAsync(new MediaFilter(LibraryId: _other))).Should().Equal("zebra.jpg");
+        (await NamesAsync(new MediaFilter(LibraryIds: [_other]))).Should().Equal("zebra.jpg");
         (await NamesAsync(new MediaFilter(Search: "be"))).Should().Equal("beach.jpg");
         (await NamesAsync(new MediaFilter(Search: "2024"))).Should().HaveCount(4, "the folder path is searchable too");
         (await NamesAsync(new MediaFilter(From: Jan.AddMonths(1), To: Jan.AddMonths(2)))).Should().Equal("party.mp4", "cat.png");

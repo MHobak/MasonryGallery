@@ -136,6 +136,9 @@ button { cursor: pointer; }
 .filter-bar label { display: flex; align-items: center; gap: 8px; }
 .filter-bar .select { color: var(--text); }
 .filter-bar input[type="date"] { max-width: 160px; }
+/* Many libraries: wrap instead of overflowing; a fully round pill looks wrong over several rows. */
+.library-chips { flex-wrap: wrap; max-width: 100%; border-radius: 16px; }
+.library-chips .chip { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Tag filter: chips for active tags, then an autocomplete box */
 .tag-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 320px; min-width: 0; color: var(--text); }

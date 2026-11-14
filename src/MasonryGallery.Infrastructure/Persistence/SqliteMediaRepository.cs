@@ -188,10 +188,10 @@ public sealed class SqliteMediaRepository : IMediaRepository
               AND m.LibraryId IN (SELECT Id FROM Library WHERE Enabled = 1)");
         var args = new DynamicParameters();
 
-        if (filter.LibraryId is { } libraryId)
+        if (filter.LibraryIds is { Count: > 0 } libraryIds)
         {
-            sql.Append(" AND m.LibraryId = @LibraryId");
-            args.Add("LibraryId", libraryId.Value);
+            sql.Append(" AND m.LibraryId IN (SELECT value FROM json_each(@LibraryIds))");
+            args.Add("LibraryIds", JsonSerializer.Serialize(libraryIds.Select(l => l.Value)));
         }
         if (filter.Kind is { } kind)
         {

@@ -93,8 +93,9 @@ public enum MediaSort
 /// <summary>What the gallery shows. Null members don't filter; dates are inclusive bounds on DateTaken (UTC).</summary>
 /// <param name="Tags">Items must carry every one of these tags.</param>
 /// <param name="ExcludedTags">Items must carry none of these tags.</param>
+/// <param name="LibraryIds">Items must come from one of these libraries; null or empty means all.</param>
 public sealed record MediaFilter(
-    LibraryId? LibraryId = null,
+    IReadOnlyList<LibraryId>? LibraryIds = null,
     MediaKind? Kind = null,
     string? Search = null,
     IReadOnlyList<string>? Tags = null,
