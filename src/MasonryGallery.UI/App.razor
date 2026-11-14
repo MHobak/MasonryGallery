@@ -293,6 +293,13 @@
         var wait = MinRefreshInterval - (DateTime.UtcNow - _lastRefresh);
         if (wait > TimeSpan.Zero) await Task.Delay(wait);
         _refreshQueued = false;
+        // Not under the open viewer: rebuilding a large grid blocks the web view's main thread (1-2 s at 578k items),
+        // which stalls video playback, and the viewer's item order should hold while it is open. Done when it closes.
+        if (_open is not null)
+        {
+            _staleAfterLightbox = true;
+            return;
+        }
         await RefreshAsync(keepPosition: true);
     }
 

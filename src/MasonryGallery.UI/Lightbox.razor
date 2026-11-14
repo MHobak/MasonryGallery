@@ -106,7 +106,9 @@
                     }
                     else
                     {
-                        <video @key="_item.Id" src="@Gallery.GetMediaUrl(_item.Id)" controls autoplay playsinline loop="@Loop"
+                        @* data-loop, not loop: WebKitGTK's own looping froze the page for ~3 s when such a video was stopped, and stalled
+                           some files mid-play (Twitter MP4s with an edit list). lightbox.js loops it on 'ended' instead. *@
+                        <video @key="_item.Id" src="@Gallery.GetMediaUrl(_item.Id)" controls autoplay playsinline data-loop="@Loop"
                                poster="@Gallery.GetThumbnailUrl(_item.Id, "medium")"
                                @onerror="OnVideoError" @onended="OnVideoEndedAsync"></video>
                     }
@@ -283,14 +285,23 @@
     private IReadOnlyList<MediaItem> _neighbors = [];
     private string _newTag = "";
     private string? _error;
-    private int _pos, _loadedId = -1;
+    private int _pos, _loadedId = -1, _openedId = -1;
     private bool _focus = true, _info, _videoFailed, _tryAnyway;
     private CancellationTokenSource? _errorTimer;
 
     protected override async Task OnParametersSetAsync()
     {
-        if (CurrentId == _loadedId) return;
-        await LoadAsync(CurrentId);
+        // CurrentId is the item the gallery opened; the viewer moves on from it by itself. The gallery passes it again on
+        // every re-render (scan progress, reloads), and comparing it with the item shown would jump back to it.
+        if (CurrentId != _openedId)
+        {
+            _openedId = CurrentId;
+            await LoadAsync(CurrentId);
+        }
+        else
+        {
+            _pos = Array.IndexOf(Ids, _loadedId); // the list may have been reloaded or reordered meanwhile
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -314,6 +325,8 @@
 
     private async Task LoadAsync(int id)
     {
+        if (_item?.Kind == MediaKind.Video && _item.Id != id)
+            await ReleaseVideoAsync();
         _loadedId = id;
         _pos = Array.IndexOf(Ids, id);
         _item = await Gallery.GetMediaAsync(id);
@@ -397,6 +410,12 @@
     private async Task VideoAsync(string method, params object[] args)
     {
         if (_zoom is not null && IsPlayableVideo) await _zoom.InvokeVoidAsync(method, args);
+    }
+
+    // The outgoing video must stop reading its file at once, not when the browser collects the element (lightbox.js).
+    private async Task ReleaseVideoAsync()
+    {
+        if (_zoom is not null) await _zoom.InvokeVoidAsync("releaseVideo");
     }
 
     private Task CloseAsync() => OnClose.InvokeAsync(_loadedId);
@@ -609,6 +628,7 @@
             }
             if (_zoom is not null)
             {
+                await _zoom.InvokeVoidAsync("releaseVideo"); // closing must not leave the video downloading either
                 await _zoom.InvokeVoidAsync("dispose");
                 await _zoom.DisposeAsync();
             }

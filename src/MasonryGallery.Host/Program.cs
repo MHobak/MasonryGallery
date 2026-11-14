@@ -142,6 +142,9 @@ try
     window.OpenNewWindow = LaunchViewer;
 
     app.MainWindow
+        // Off: from level 1 up, Photino prints every message sent to the web view, including the whole
+        // gallery layout (~18 MB at 578k items) on each reload; a terminal taking that in stalls the app.
+        .SetLogVerbosity(0)
         .SetSize(1400, 900)
         .SetTitle(isViewer ? "MasonryGallery (viewer)" : "MasonryGallery");
     // A viewer opened on top of the main window, at the same spot, would look like nothing happened.

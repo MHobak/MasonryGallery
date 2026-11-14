@@ -318,6 +318,27 @@ export function create(stage, dotnet) {
         dotnet.invokeMethodAsync('OnSwipe', e.clientX < r.left + r.width / 2 ? 'prev' : 'next');
     };
 
+    // WebKitGTK sometimes leaves an autoplay video paused once it can play (seen with Twitter MP4s, local or not).
+    // Start it the first time it can play; only the first time, since later canplay events follow a seek or a pause
+    // the user chose.
+    // Media events don't bubble, so this listens in the capture phase.
+    const started = new WeakSet();
+    const onCanPlay = e => {
+        const v = e.target;
+        if (!(v instanceof HTMLVideoElement) || started.has(v)) return;
+        started.add(v);
+        if (v.autoplay && v.paused) v.play().catch(() => { });
+    };
+
+    // Loops a video marked data-loop (Lightbox.razor explains why not the loop attribute). Reloading starts a fresh
+    // player from the start; seeking back to 0 left some of those files stuck on the first frame.
+    const onEnded = e => {
+        const v = e.target;
+        if (!(v instanceof HTMLVideoElement) || !v.hasAttribute('data-loop')) return;
+        v.load();
+        v.play().catch(() => { });
+    };
+
     // Windows turns a touch press-and-hold into a right click.
     const onContextMenu = e => {
         if (touches.size > 0 || e.timeStamp - lastTouchEnd < 800) e.preventDefault();
@@ -337,6 +358,8 @@ export function create(stage, dotnet) {
         ['pointercancel', onTouchUp],
         ['contextmenu', onContextMenu],
         ['click', onBlankClick],
+        ['canplay', onCanPlay, true],
+        ['ended', onEnded, true],
     ];
     for (const [type, fn, options] of listeners) stage.addEventListener(type, fn, options);
 
@@ -358,6 +381,15 @@ export function create(stage, dotnet) {
         reset,
         togglePlay,
         seek,
+        // Stops the current video's download now. A removed <video> keeps reading its file until it is garbage-collected;
+        // on a shared slow link (a phone mounted over ADB) that starved the next video for seconds.
+        releaseVideo() {
+            const v = video();
+            if (!v) return;
+            v.pause();
+            v.removeAttribute('src');
+            v.load();
+        },
         zoomBy(factor) { zoomAt(factor, ...centre()); },
         zoomIn() { zoomAt(STEP, ...centre()); },
         zoomOut() { zoomAt(1 / STEP, ...centre()); },
@@ -365,7 +397,7 @@ export function create(stage, dotnet) {
             abandon();
             clearTimeout(badgeTimer);
             root.removeEventListener('keydown', onKey);
-            for (const [type, fn] of listeners) stage.removeEventListener(type, fn);
+            for (const [type, fn, options] of listeners) stage.removeEventListener(type, fn, options); // capture must match
         }
     };
 }

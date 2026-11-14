@@ -118,6 +118,24 @@ public sealed class ComponentTests : TestContext
     }
 
     [Fact]
+    public void Gallery_re_render_keeps_the_item_the_viewer_moved_to()
+    {
+        var ids = new[] { Seed("a.jpg"), Seed("b.jpg"), Seed("c.jpg") };
+        var cut = RenderComponent<Lightbox>(p => p.Add(c => c.Ids, ids).Add(c => c.CurrentId, ids[0]));
+        cut.WaitForAssertion(() => cut.Find(".lb-title strong").TextContent.Should().Be("a.jpg"));
+
+        cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "ArrowRight" });
+        cut.WaitForAssertion(() => cut.Find(".lb-title strong").TextContent.Should().Be("b.jpg"));
+
+        // The gallery re-renders (scan progress) and reloads its list in a new order; it still passes the item it opened.
+        cut.SetParametersAndRender(p => p.Add(c => c.Ids, new[] { ids[2], ids[1], ids[0] }).Add(c => c.CurrentId, ids[0]));
+        cut.Find(".lb-title strong").TextContent.Should().Be("b.jpg", "a re-render must not jump back to the opened item");
+
+        cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "ArrowRight" });
+        cut.WaitForAssertion(() => cut.Find(".lb-title strong").TextContent.Should().Be("a.jpg", "next follows the new order"));
+    }
+
+    [Fact]
     public async Task Swipes_move_through_items_toggle_details_and_close_like_esc()
     {
         var ids = new[] { Seed("a.jpg"), Seed("b.jpg") };
@@ -183,12 +201,12 @@ public sealed class ComponentTests : TestContext
     {
         var ids = new[] { Seed("clip.mp4", MediaKind.Video, playable: true), Seed("b.jpg") };
         var cut = RenderComponent<Lightbox>(p => p.Add(c => c.Ids, ids).Add(c => c.CurrentId, ids[0]));
-        cut.WaitForAssertion(() => cut.Find("video").HasAttribute("loop").Should().BeTrue());
+        cut.WaitForAssertion(() => cut.Find("video").HasAttribute("data-loop").Should().BeTrue());
 
         cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "p" });
-        cut.Find("video").HasAttribute("loop").Should().BeFalse("presentation plays videos through");
+        cut.Find("video").HasAttribute("data-loop").Should().BeFalse("presentation plays videos through");
         cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "r" });
-        cut.Find("video").HasAttribute("loop").Should().BeTrue();
+        cut.Find("video").HasAttribute("data-loop").Should().BeTrue();
 
         // Autoplay waits for a looping video; once loop is off, the video's end moves on.
         cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "a" });
@@ -199,7 +217,7 @@ public sealed class ComponentTests : TestContext
 
         cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "Escape" });
         cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "ArrowLeft" });
-        cut.WaitForAssertion(() => cut.Find("video").HasAttribute("loop").Should().BeTrue("the viewer kept its own setting"));
+        cut.WaitForAssertion(() => cut.Find("video").HasAttribute("data-loop").Should().BeTrue("the viewer kept its own setting"));
     }
 
     [Fact]
