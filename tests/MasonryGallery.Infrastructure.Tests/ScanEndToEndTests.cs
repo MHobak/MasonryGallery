@@ -114,7 +114,21 @@ public sealed class ScanEndToEndTests : IDisposable
         }
     }
 
-    private sealed record Rig(Scan Scan, SqliteMediaRepository Media, SqliteLibraryRepository Libs, LibraryId Id, CountingProbe Probe)
+    // Counts ItemsChanged calls directly: PipelineProgressReporter batches them for 500 ms, so "none" would need a wait.
+    private sealed class CountingReporter : IProgressReporter
+    {
+        private readonly PipelineProgressReporter _inner = new();
+        private int _itemsChanged;
+        public int ItemsChangedCalls => Volatile.Read(ref _itemsChanged);
+        public IObservable<PipelineEvent> Events => _inner.Events;
+        public IObservable<GalleryChange> Changes => _inner.Changes;
+        public void Report(PipelineEvent evt) => _inner.Report(evt);
+        public void ItemsChanged() => Interlocked.Increment(ref _itemsChanged);
+        public void ThumbnailReady(int mediaId, int averageRgb) => _inner.ThumbnailReady(mediaId, averageRgb);
+    }
+
+    private sealed record Rig(Scan Scan, SqliteMediaRepository Media, SqliteLibraryRepository Libs, LibraryId Id, CountingProbe Probe,
+        CountingReporter Progress)
     {
         public async Task<int> CountAsync() => (await new GetLayoutItems(Media).ExecuteAsync()).Count;
         public async Task<LibraryStatus> StatusAsync() => (await Libs.GetByIdAsync(Id)).Value!.Status;
@@ -129,14 +143,30 @@ public sealed class ScanEndToEndTests : IDisposable
         var libs = new SqliteLibraryRepository(factory, NullLogger<SqliteLibraryRepository>.Instance);
         var media = new SqliteMediaRepository(factory, NullLogger<SqliteMediaRepository>.Instance);
         var probe = new CountingProbe();
+        var progress = new CountingReporter();
         var scan = new Scan(libs, media,
             new FileSystemEnumerator(NullLogger<FileSystemEnumerator>.Instance), probe,
             new SkiaThumbnailGenerator(NullLogger<SkiaThumbnailGenerator>.Instance),
             new ShardedThumbnailStore(Path.Combine(_dir, "thumbs"), "v1", NullLogger<ShardedThumbnailStore>.Instance),
-            new SystemClock(), new PipelineProgressReporter(), NullLogger<Scan>.Instance);
+            new SystemClock(), progress, NullLogger<Scan>.Instance);
         var id = (await new AddLibrary(libs).ExecuteAsync("Photos", Path.Combine(_dir, "photos"))).Value!.Id;
         (await scan.ExecuteAsync(id)).Error.Should().BeNull();
-        return new Rig(scan, media, libs, id, probe);
+        return new Rig(scan, media, libs, id, probe, progress);
+    }
+
+    [Fact]
+    public async Task Rescan_asks_for_a_gallery_reload_only_when_items_changed()
+    {
+        var rig = await SetupAsync();
+        rig.Progress.ItemsChangedCalls.Should().BePositive("the first scan added items");
+
+        var before = rig.Progress.ItemsChangedCalls;
+        await rig.Scan.ExecuteAsync(rig.Id);
+        rig.Progress.ItemsChangedCalls.Should().Be(before, "nothing changed on disk, and a reload resends every item");
+
+        File.Delete(Path.Combine(_dir, "photos", "a.png"));
+        await rig.Scan.ExecuteAsync(rig.Id);
+        rig.Progress.ItemsChangedCalls.Should().BeGreaterThan(before, "the sweep hid a deleted file");
     }
 
     [Fact]

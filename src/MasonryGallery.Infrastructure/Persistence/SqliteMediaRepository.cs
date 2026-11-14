@@ -415,19 +415,19 @@ public sealed class SqliteMediaRepository : IMediaRepository
         await SoftDeleteOldScansAsync(libraryId, scanId, 30, ct);
     }
 
-    public async Task<int> SoftDeleteOldScansAsync(int libraryId, int scanId, int retentionDays, CancellationToken ct = default)
+    public async Task<(int Hidden, int Purged)> SoftDeleteOldScansAsync(int libraryId, int scanId, int retentionDays, CancellationToken ct = default)
     {
         using var conn = _factory.CreateConnection();
         using var trans = conn.BeginTransaction();
         var now = DateTimeOffset.UtcNow;
-        await conn.ExecuteAsync(@"UPDATE Media SET DeletedAt = @Now
+        var hidden = await conn.ExecuteAsync(@"UPDATE Media SET DeletedAt = @Now
                                   WHERE LibraryId = @LibraryId AND ScanId != @ScanId AND DeletedAt IS NULL",
             new { Now = now.ToUnixTimeMilliseconds(), LibraryId = libraryId, ScanId = scanId }, trans);
         // Rows stay soft-deleted for the retention window so a file that comes back keeps its tags.
         var purged = await conn.ExecuteAsync("DELETE FROM Media WHERE LibraryId = @LibraryId AND DeletedAt < @Cutoff",
             new { LibraryId = libraryId, Cutoff = now.AddDays(-retentionDays).ToUnixTimeMilliseconds() }, trans);
         await trans.CommitAsync(ct);
-        return purged;
+        return (hidden, purged);
     }
 
     // "Under folder F" is a prefix test on RelPath; substr avoids LIKE, where '%' and '_' in folder names would be wildcards.

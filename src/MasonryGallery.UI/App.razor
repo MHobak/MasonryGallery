@@ -1,8 +1,10 @@
 @implements IAsyncDisposable
+@using Microsoft.Extensions.Logging
 @inject GalleryService Gallery
 @inject IJSRuntime JS
 @inject AppMode Mode
 @inject WindowControl Window
+@inject ILogger<App> Log
 
 <div class="app">
     <header class="bar">
@@ -261,11 +263,16 @@
             do
             {
                 _refreshPending = false;
+                var sw = System.Diagnostics.Stopwatch.StartNew();
                 var flat = await Gallery.GetLayoutAsync(_filter);
+                var queried = sw.ElapsedMilliseconds;
                 _count = flat.Length / GalleryService.LayoutStride;
                 _ids = new int[_count];
                 for (var i = 0; i < _count; i++) _ids[i] = flat[i * GalleryService.LayoutStride];
                 await _view.InvokeVoidAsync("setItems", flat, keepPosition);
+                if (sw.ElapsedMilliseconds > 500)
+                    Log.LogInformation("Slow gallery refresh: {Count} items, query {Query} ms, sent and laid out in {Shown} ms",
+                        _count, queried, sw.ElapsedMilliseconds - queried);
                 _loaded = true;
                 _lastRefresh = DateTime.UtcNow;
                 StateHasChanged();

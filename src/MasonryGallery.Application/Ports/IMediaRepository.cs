@@ -41,8 +41,8 @@ public interface IMediaRepository
     Task<IReadOnlyList<FailedItem>> GetFailedAsync(int limit, CancellationToken ct = default);
     Task<int> CountFailedAsync(CancellationToken ct = default);
     Task MarkScanCompleteAsync(int libraryId, int scanId, CancellationToken ct = default);
-    /// <returns>The number of rows permanently deleted (past retention).</returns>
-    Task<int> SoftDeleteOldScansAsync(int libraryId, int scanId, int retentionDays, CancellationToken ct = default);
+    /// <returns>Rows hidden now (not seen by this scan) and rows permanently deleted (past retention).</returns>
+    Task<(int Hidden, int Purged)> SoftDeleteOldScansAsync(int libraryId, int scanId, int retentionDays, CancellationToken ct = default);
     Task<int> CountLiveAsync(int libraryId, CancellationToken ct = default);
     /// <summary>Soft-deletes each path, and everything under it when it was a folder.</summary>
     Task<int> SoftDeletePathsAsync(int libraryId, IReadOnlyCollection<string> relPaths, CancellationToken ct = default);

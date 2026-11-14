@@ -104,10 +104,13 @@ public sealed class Scan : ILibraryScanner
             if (filesSeen == 0 && await _mediaRepository.CountLiveAsync(libraryId.Value, ct) > 0)
                 return await MarkOfflineAsync(libraryId, "Library folder is empty; keeping existing items", ct);
 
-            var purged = await _mediaRepository.SoftDeleteOldScansAsync(libraryId.Value, scanId, 30, ct);
+            var (hidden, purged) = await _mediaRepository.SoftDeleteOldScansAsync(libraryId.Value, scanId, 30, ct);
             if (purged > 0)
                 await CleanThumbnailCacheAsync(ct);
-            _progress.ItemsChanged(); // the sweep may have removed rows
+            // Only when the sweep removed rows: a reload resends every item (578k took ~2 s), and the startup
+            // check of every library would otherwise trigger one per library even when nothing changed.
+            if (hidden > 0)
+                _progress.ItemsChanged();
             await _libraryRepository.UpdateAsync(new Library(library.Name, library.RootPath)
             {
                 Id = libraryId,

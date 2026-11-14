@@ -191,7 +191,9 @@ try
         janitor.Start();
         // Startup reconcile of every library, then live watching and periodic rescans (design §5.4).
         // Not awaited: GTK needs app.Run() on the thread that built the window, and an await here could resume elsewhere.
-        _ = monitor.StartAsync().ContinueWith(
+        // Task.Run: setting up the watchers walks every library's folder tree (Linux watches each folder), which took
+        // ~23 s on large drives; on this thread it ran before app.Run() and kept the window from opening.
+        _ = Task.Run(() => monitor.StartAsync()).ContinueWith(
             t => Log.Error(t.Exception, "Library monitor failed to start"), TaskContinuationOptions.OnlyOnFaulted);
     }
 
