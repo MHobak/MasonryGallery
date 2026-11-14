@@ -119,6 +119,35 @@ public sealed class ComponentTests : TestContext
         closed.Should().Be(1);
     }
 
+    [Fact]
+    public async Task Swipes_move_through_items_toggle_details_and_close_like_esc()
+    {
+        var ids = new[] { Seed("a.jpg"), Seed("b.jpg") };
+        var closed = 0;
+        var cut = RenderComponent<Lightbox>(p => p
+            .Add(c => c.Ids, ids).Add(c => c.CurrentId, ids[0]).Add(c => c.Present, true)
+            .Add(c => c.OnClose, _ => closed++));
+        cut.WaitForAssertion(() => cut.Find(".present-count").TextContent.Should().Be("1 / 2"));
+        Task<bool> Swipe(string action) => cut.InvokeAsync(() => cut.Instance.OnSwipe(action));
+
+        (await Swipe("prev")).Should().BeFalse("there is nothing before the first item, so it snaps back");
+        (await Swipe("next")).Should().BeTrue();
+        cut.Find(".present-count").TextContent.Should().Be("2 / 2");
+        (await Swipe("next")).Should().BeFalse();
+
+        (await Swipe("close")).Should().BeFalse("the first swipe down only leaves presentation");
+        cut.Find(".lb").ClassList.Should().NotContain("presenting");
+        closed.Should().Be(0);
+
+        await Swipe("details");
+        cut.FindAll(".lb-info").Should().ContainSingle();
+        await Swipe("details");
+        cut.FindAll(".lb-info").Should().BeEmpty();
+
+        await Swipe("close");
+        closed.Should().Be(1);
+    }
+
     private IRenderedComponent<Lightbox> Present(int[] ids, bool autoplay)
         => RenderComponent<Lightbox>(p => p
             .Add(c => c.Ids, ids).Add(c => c.CurrentId, ids[0]).Add(c => c.Present, true).Add(c => c.Autoplay, autoplay));

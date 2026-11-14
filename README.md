@@ -41,6 +41,20 @@ dotnet run --project src/MasonryGallery.Host
 
    Videos the app can't play get an **Open in default player** button.
 
+   **On a touch screen:**
+
+   | Gesture | Action |
+   |---|---|
+   | Swipe left / right | Next / previous (the item follows your finger) |
+   | Swipe down | Close (in presentation: leave presentation first) |
+   | Swipe up | Details and tags |
+   | Pinch, double-tap | Zoom an image; drag to pan while zoomed |
+   | Double-tap the left / right third of a video | Back / forward 5 seconds; keep tapping to add 5 more |
+   | Hold the right / left third of a video | Play forward / rewind at 2× until you let go (rewind steps frame by frame) |
+   | Tap (in presentation) | Show the controls |
+
+   The playback bar at the bottom of a video is left to the player. Buttons are bigger on touch screens.
+
    **Presentation** also starts with `P` on a focused tile. The ▷ button in the top bar starts a **slideshow**: presentation with autoplay on, from the first item, so it follows the current filters and sort (random included). Arrow keys and the on-screen arrows move through the items; the controls and pointer hide when the mouse is still.
 
    **Autoplay** shows each image for the time set in **Settings → Presentation** (5 seconds by default; a thin bar shows the countdown) and lets each video play to its end, then moves on, starting over after the last item. Pausing autoplay (`A` or its button) keeps the current item on screen; the arrows still work and restart the countdown.

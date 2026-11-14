@@ -126,6 +126,8 @@
                     @onclick="() => GoAsync(1)" @onclick:stopPropagation="true">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
             </button>
+            @* Touch feedback ("« 10 s", "2× »"); lightbox.js fills it, so it stays empty here. *@
+            <div class="lb-gesture" aria-hidden="true"></div>
         </div>
 
         @if (_info && _item is not null)
@@ -274,6 +276,7 @@
 
     private ElementReference _root, _stage;
     private IJSObjectReference? _module, _zoom, _presentation;
+    private DotNetObjectReference<Lightbox>? _self;
     private bool _presenting;
     private MediaItem? _item;
     private IReadOnlyList<Tag> _tags = [];
@@ -297,7 +300,8 @@
         if (firstRender)
         {
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./_content/MasonryGallery.UI/js/lightbox.js");
-            _zoom = await _module.InvokeAsync<IJSObjectReference>("create", _stage);
+            _self = DotNetObjectReference.Create(this);
+            _zoom = await _module.InvokeAsync<IJSObjectReference>("create", _stage, _self);
             if (Present)
             {
                 _autoplay = Autoplay;
@@ -398,6 +402,31 @@
     }
 
     private Task CloseAsync() => OnClose.InvokeAsync(_loadedId);
+
+    /// <summary>A touch swipe on the stage (lightbox.js). Returns whether the item changed; if not, the media snaps back.</summary>
+    [JSInvokable]
+    public async Task<bool> OnSwipe(string action)
+    {
+        switch (action)
+        {
+            case "next" or "prev":
+                var from = _pos;
+                await GoAsync(action == "next" ? 1 : -1);
+                StateHasChanged();
+                return _pos != from;
+            case "close" when _presenting:
+                await SetPresentingAsync(false); // like Esc: leave presentation first
+                break;
+            case "close":
+                await CloseAsync();
+                return true;
+            case "details" when !_presenting: // presentation hides the details panel
+                _info = !_info;
+                break;
+        }
+        StateHasChanged();
+        return false;
+    }
 
     private Task OnStageClickAsync() => _presenting ? Task.CompletedTask : CloseAsync();
 
@@ -586,5 +615,6 @@
             if (_module is not null) await _module.DisposeAsync();
         }
         catch (JSDisconnectedException) { }
+        _self?.Dispose();
     }
 }
