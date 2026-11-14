@@ -247,7 +247,9 @@ export function create(host, dotnet, mediaBase, token) {
     return {
         // keepPosition: a refresh of the same view (scan progress) keeps the top tile in place;
         // a new filter or sort starts from the top.
-        setItems(next, keepPosition) {
+        // `json`: the flat item array as JSON text (see App.razor RefreshAsync for why not an array).
+        setItems(json, keepPosition) {
+            const next = JSON.parse(json);
             if (sameShape(next)) {
                 // Same items, same sizes: only readiness/colour/favorite can differ. Patch, don't relayout.
                 flat = next;

@@ -185,7 +185,10 @@ public sealed class SqliteMediaRepository : IMediaRepository
             SELECT m.Id, m.Width, m.Height, m.Kind, m.ThumbState, m.Placeholder, m.Favorite
             FROM Media m
             WHERE m.DeletedAt IS NULL
-              AND m.LibraryId IN (SELECT Id FROM Library WHERE Enabled = 1)");
+              AND +m.LibraryId IN (SELECT Id FROM Library WHERE Enabled = 1)");
+        // '+' keeps this near-always-true check from choosing the index: unfiltered, SQLite then walks
+        // IX_Media_Sort_Taken in order instead of sorting every row (578k: 160 ms instead of 210-290 ms).
+        // A library, kind or other filter below still picks its own index.
         var args = new DynamicParameters();
 
         if (filter.LibraryIds is { Count: > 0 } libraryIds)
@@ -232,16 +235,24 @@ public sealed class SqliteMediaRepository : IMediaRepository
             _ => " ORDER BY m.DateTaken DESC, m.Id DESC",
         });
 
-        var rows = await conn.QueryAsync<(long Id, long? Width, long? Height, long Kind, long ThumbState, byte[]? Placeholder, long Favorite)>(
-            sql.ToString(), args);
-        // Unprobed items have no size yet; 1:1 keeps them in the grid until the probe reports in.
-        var items = rows.Select(r => new LibraryItem((int)r.Id, (int)(r.Width ?? 1), (int)(r.Height ?? 1), (MediaKind)r.Kind,
-            r.ThumbState == (int)ThumbState.Done, r.Placeholder, r.Favorite != 0));
+        // Read by hand: every gallery reload runs this over every item, and Dapper's tuple mapping cost ~200 ms more on 578k.
+        var items = new List<LibraryItem>();
+        using (var r = await conn.ExecuteReaderAsync(sql.ToString(), args))
+        {
+            while (r.Read())
+            {
+                items.Add(new LibraryItem(r.GetInt32(0),
+                    // Unprobed items have no size yet; 1:1 keeps them in the grid until the probe reports in.
+                    r.IsDBNull(1) ? 1 : r.GetInt32(1), r.IsDBNull(2) ? 1 : r.GetInt32(2),
+                    (MediaKind)r.GetInt32(3), r.GetInt32(4) == (int)ThumbState.Done,
+                    r.IsDBNull(5) ? null : r.GetFieldValue<byte[]>(5), r.GetInt32(6) != 0));
+            }
+        }
         // Each item's place is a hash of its ID and the seed, not a shuffle of the list: refreshes during a scan
         // keep the order, and new items land at random spots instead of reshuffling everything.
         if (filter.Sort == MediaSort.Random)
-            items = items.OrderBy(i => ShufflePosition(i.Id, filter.Seed)).ThenBy(i => i.Id);
-        return items.ToList();
+            return items.OrderBy(i => ShufflePosition(i.Id, filter.Seed)).ThenBy(i => i.Id).ToList();
+        return items;
     }
 
     // SplitMix64 finalizer: consecutive IDs (files of one folder) end up far apart.

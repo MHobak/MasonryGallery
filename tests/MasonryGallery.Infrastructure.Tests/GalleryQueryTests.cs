@@ -1,6 +1,7 @@
 namespace MasonryGallery.Infrastructure.Tests;
 
 using FluentAssertions;
+using MasonryGallery.Application.Pipeline;
 using MasonryGallery.Application.Ports;
 using MasonryGallery.Application.UseCases;
 using MasonryGallery.Domain;
@@ -190,6 +191,31 @@ public sealed class GalleryQueryTests : IDisposable
     {
         await SeedAsync();
         (await NamesAsync(new MediaFilter(Sort: sort))).Should().Equal(expected);
+    }
+
+    [Fact]
+    public async Task Layout_items_carry_size_kind_thumbnail_state_colour_and_favorite()
+    {
+        await SeedAsync();
+        await _media.UpsertBatchAsync([new MediaItem
+        {
+            LibraryId = _other, RelPath = "new/unprobed.mp4", FileName = "unprobed.mp4", Kind = MediaKind.Video,
+            SizeBytes = 10, ModifiedUtc = Jan, DateTaken = Jan, ScanId = 1 // no size yet: not probed
+        }]);
+        var cat = await IdOfAsync("cat.png");
+        var unprobedId = await IdOfAsync("unprobed.mp4");
+        await _media.UpdateThumbAsync(cat, ThumbState.Done, 1, averageRgb: 0x112233);
+        await _media.SetFavoriteAsync(cat, true);
+
+        var items = await _media.GetLayoutItemsAsync(new MediaFilter());
+        var unprobed = items.Single(i => i.Id == unprobedId);
+        unprobed.Should().BeEquivalentTo(new { Width = 1, Height = 1, Kind = MediaKind.Video, ThumbReady = false, Favorite = false },
+            "an unprobed item is a 1:1 placeholder until its size is known");
+        unprobed.Placeholder.Should().BeNull();
+
+        var ready = items.Single(i => i.Id == cat);
+        ready.Should().BeEquivalentTo(new { Width = 4, Height = 3, Kind = MediaKind.Image, ThumbReady = true, Favorite = true });
+        PlaceholderColor.FromBytes(ready.Placeholder).Should().Be(0x112233);
     }
 
     [Fact]

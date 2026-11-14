@@ -269,7 +269,9 @@
                 _count = flat.Length / GalleryService.LayoutStride;
                 _ids = new int[_count];
                 for (var i = 0; i < _count; i++) _ids[i] = flat[i * GalleryService.LayoutStride];
-                await _view.InvokeVoidAsync("setItems", flat, keepPosition);
+                // As one JSON string: Blazor runs a reviver on every value of an array argument, which for 578k items
+                // (4M numbers) took ~600 ms; a string is one value, and JSON.parse in layout.js is fast (~175 ms total).
+                await _view.InvokeVoidAsync("setItems", JsonSerializer.Serialize(flat), keepPosition);
                 if (sw.ElapsedMilliseconds > 500)
                     Log.LogInformation("Slow gallery refresh: {Count} items, query {Query} ms, sent and laid out in {Shown} ms",
                         _count, queried, sw.ElapsedMilliseconds - queried);
