@@ -26,6 +26,17 @@ export function videoSide(x, rect) {
     return t < 1 / 3 ? 'left' : t > 2 / 3 ? 'right' : null;
 }
 
+/** The part of an object-fit: contain box its picture covers; the rest is empty bars (presentation fills the screen). */
+export function pictureRect(rect, naturalWidth, naturalHeight) {
+    if (!naturalWidth || !naturalHeight) return rect; // not loaded yet: treat the whole box as picture
+    const s = Math.min(rect.width / naturalWidth, rect.height / naturalHeight);
+    const width = naturalWidth * s, height = naturalHeight * s;
+    return { left: rect.left + (rect.width - width) / 2, top: rect.top + (rect.height - height) / 2, width, height };
+}
+
+const within = (e, r) => e.clientX >= r.left && e.clientX <= r.left + r.width && e.clientY >= r.top && e.clientY <= r.top + r.height;
+const pictureOf = el => pictureRect(el.getBoundingClientRect(), el.naturalWidth ?? el.videoWidth, el.naturalHeight ?? el.videoHeight);
+
 export function create(stage, dotnet) {
     let scale = 1, x = 0, y = 0;
     let drag = null;
@@ -74,7 +85,7 @@ export function create(stage, dotnet) {
         v.currentTime = Math.min(v.duration, Math.max(0, v.currentTime + seconds));
     }
 
-    // A gesture must not end as a click: on the backdrop it closes the lightbox, on a video it toggles play.
+    // A gesture must not end as a click: beside the media it changes item (onBlankClick), on a video it toggles play.
     // A mouse click follows pointerup at once; a touch click can lag, so touch keeps the guard a little longer.
     function swallowClick(ms = 0) {
         const swallow = ev => { ev.stopPropagation(); ev.preventDefault(); };
@@ -93,7 +104,8 @@ export function create(stage, dotnet) {
         zoomAt(e.deltaY < 0 ? STEP : 1 / STEP, e.clientX, e.clientY);
     };
     const onDoubleClick = e => {
-        if (!e.target.closest('img.zoomable')) return;
+        const img = e.target.closest('img.zoomable');
+        if (!img || !within(e, pictureOf(img))) return; // a double click on the bars is two clicks to move on
         if (e.timeStamp - lastTouchEnd < 800) return; // a double tap already zoomed (tap below)
         if (scale > 1) reset(); else zoomAt(2.5, e.clientX, e.clientY);
     };
@@ -195,7 +207,7 @@ export function create(stage, dotnet) {
             const sign = gesture.side === 'right' ? 1 : -1;
             seek(sign * SEEK_S);
             flash(sign > 0 ? `${streak.total} s »` : `« ${streak.total} s`, gesture.side);
-        } else if (double && e.target.closest('img.zoomable')) {
+        } else if (double && e.target.closest('img.zoomable') && within(e, pictureOf(image()))) {
             if (scale > 1) reset(); else zoomAt(2.5, e.clientX, e.clientY);
         }
     }
@@ -229,10 +241,11 @@ export function create(stage, dotnet) {
         if (touches.size === 2) startPinch();
         if (touches.size > 1 || e.target.closest('button, input, a, .present-bar, .lb-fallback')) return;
         const v = e.target.closest('video');
-        const r = v?.getBoundingClientRect();
-        if (r && e.clientY > r.bottom - CONTROLS_PX) return; // leave the native playback bar alone
+        if (v && e.clientY > v.getBoundingClientRect().bottom - CONTROLS_PX) return; // leave the native playback bar alone
+        // Seek and hold zones are thirds of the picture; a tap on the bars beside it moves on (onBlankClick).
+        const pic = v && pictureOf(v);
         g = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: e.timeStamp, mode: 'pending', video: v,
-              side: r ? videoSide(e.clientX, r) : null };
+              side: pic && within(e, pic) ? videoSide(e.clientX, pic) : null };
         if (g.side) g.holdTimer = setTimeout(startHold, HOLD_MS);
     };
 
@@ -290,6 +303,21 @@ export function create(stage, dotnet) {
         }
     };
 
+    // A click (or tap) on the blank area beside the picture works like the arrows: left half back, right half on.
+    // Blank is the stage itself or the bars inside the media's own box (in presentation it fills the screen).
+    // defaultPrevented: swallowClick's guard; it runs on this same element, so it can't stop this listener.
+    const onBlankClick = e => {
+        if (e.defaultPrevented) return;
+        const media = e.target.closest('img.zoomable, video');
+        if (media ? within(e, pictureOf(media)) : e.target !== stage) return;
+        if (media?.tagName === 'VIDEO') {
+            if (e.clientY > media.getBoundingClientRect().bottom - CONTROLS_PX) return; // its playback bar
+            e.preventDefault(); // a click beside the video must not also toggle play
+        }
+        const r = stage.getBoundingClientRect();
+        dotnet.invokeMethodAsync('OnSwipe', e.clientX < r.left + r.width / 2 ? 'prev' : 'next');
+    };
+
     // Windows turns a touch press-and-hold into a right click.
     const onContextMenu = e => {
         if (touches.size > 0 || e.timeStamp - lastTouchEnd < 800) e.preventDefault();
@@ -308,6 +336,7 @@ export function create(stage, dotnet) {
         ['pointerup', onTouchUp],
         ['pointercancel', onTouchUp],
         ['contextmenu', onContextMenu],
+        ['click', onBlankClick],
     ];
     for (const [type, fn, options] of listeners) stage.addEventListener(type, fn, options);
 

@@ -41,6 +41,8 @@ dotnet run --project src/MasonryGallery.Host
 
    Videos the app can't play get an **Open in default player** button.
 
+   Clicking the empty space left or right of the item goes to the previous or next one, like the arrows.
+
    **On a touch screen:**
 
    | Gesture | Action |

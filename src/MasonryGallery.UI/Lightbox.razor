@@ -47,11 +47,11 @@
     </div>
 
     <div class="lb-body">
-        @* In presentation a stray click must not end the show; Esc or the exit button does. *@
-        <div class="lb-stage" @ref="_stage" @onclick="OnStageClickAsync">
+        @* A click on the blank area beside the media moves back or on (lightbox.js); nothing closes on a click. *@
+        <div class="lb-stage" @ref="_stage">
             @if (_presenting)
             {
-                <div class="present-bar" @onclick:stopPropagation="true">
+                <div class="present-bar">
                     <span class="present-count">@(_pos + 1) / @Ids.Length</span>
                     <button type="button" class="icon-btn" aria-pressed="@Bool(_autoplay)" aria-label="Autoplay"
                             title="@(_autoplay ? "Pause autoplay (A)" : "Autoplay (A)")" @onclick="ToggleAutoplay">
@@ -83,7 +83,7 @@
                 }
             }
             <button type="button" class="nav prev" aria-label="Previous" disabled="@(_pos <= 0)"
-                    @onclick="() => GoAsync(-1)" @onclick:stopPropagation="true">
+                    @onclick="() => GoAsync(-1)">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg>
             </button>
 
@@ -93,7 +93,7 @@
                 {
                     @if (_videoFailed || (_item.Playable == false && !_tryAnyway))
                     {
-                        <div class="lb-fallback" @onclick:stopPropagation="true">
+                        <div class="lb-fallback">
                             <p>@(_videoFailed ? "This video can't be played here." : "This video's format usually can't be played here.")</p>
                             <div class="row">
                                 <button type="button" class="btn primary" @onclick="() => OpenExternallyAsync(false)">Open in default player</button>
@@ -108,8 +108,7 @@
                     {
                         <video @key="_item.Id" src="@Gallery.GetMediaUrl(_item.Id)" controls autoplay playsinline loop="@Loop"
                                poster="@Gallery.GetThumbnailUrl(_item.Id, "medium")"
-                               @onerror="OnVideoError" @onended="OnVideoEndedAsync"
-                               @onclick:stopPropagation="true"></video>
+                               @onerror="OnVideoError" @onended="OnVideoEndedAsync"></video>
                     }
                 }
                 else
@@ -117,13 +116,12 @@
                     @* Known dimensions size the box at once; the 960 px preview fills it until the original arrives. *@
                     <img @key="_item.Id" class="zoomable" src="@Gallery.GetMediaUrl(_item.Id)" alt="@_item.FileName"
                          width="@_item.Width" height="@_item.Height" draggable="false"
-                         style="background-image: url('@Gallery.GetThumbnailUrl(_item.Id, "medium")')"
-                         @onclick:stopPropagation="true" />
+                         style="background-image: url('@Gallery.GetThumbnailUrl(_item.Id, "medium")')" />
                 }
             }
 
             <button type="button" class="nav next" aria-label="Next" disabled="@(_pos >= Ids.Length - 1)"
-                    @onclick="() => GoAsync(1)" @onclick:stopPropagation="true">
+                    @onclick="() => GoAsync(1)">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
             </button>
             @* Touch feedback ("« 10 s", "2× »"); lightbox.js fills it, so it stays empty here. *@
@@ -403,7 +401,10 @@
 
     private Task CloseAsync() => OnClose.InvokeAsync(_loadedId);
 
-    /// <summary>A touch swipe on the stage (lightbox.js). Returns whether the item changed; if not, the media snaps back.</summary>
+    /// <summary>
+    /// A touch swipe, or ("next" / "prev") a click beside the media, on the stage (lightbox.js).
+    /// Returns whether the item changed; if not, swiped media snaps back.
+    /// </summary>
     [JSInvokable]
     public async Task<bool> OnSwipe(string action)
     {
@@ -428,7 +429,6 @@
         return false;
     }
 
-    private Task OnStageClickAsync() => _presenting ? Task.CompletedTask : CloseAsync();
 
     // Full screen window, no chrome, media scaled up to fill the screen without cropping (see .presenting in app.css).
     private async Task SetPresentingAsync(bool on)

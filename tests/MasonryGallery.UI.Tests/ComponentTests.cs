@@ -104,8 +104,6 @@ public sealed class ComponentTests : TestContext
 
         cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "ArrowRight" });
         cut.WaitForAssertion(() => cut.Find(".present-count").TextContent.Should().Be("2 / 2"));
-        cut.Find(".lb-stage").Click();
-        closed.Should().Be(0, "a click on the backdrop doesn't end a presentation");
 
         cut.Find(".lb").KeyDown(new KeyboardEventArgs { Key = "Escape" });
         cut.Find(".lb").ClassList.Should().NotContain("presenting");

@@ -1,7 +1,7 @@
 // Touch gesture rules in lightbox.js. Run with: node --test tests/MasonryGallery.UI.Tests/js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { swipeAction, videoSide } from '../../../src/MasonryGallery.UI/wwwroot/js/lightbox.js';
+import { pictureRect, swipeAction, videoSide } from '../../../src/MasonryGallery.UI/wwwroot/js/lightbox.js';
 
 const W = 1000, H = 800, SLOW = 2000;
 
@@ -28,4 +28,14 @@ test('video sides are the outer thirds', () => {
     assert.equal(videoSide(150, rect), 'left');
     assert.equal(videoSide(250, rect), null);
     assert.equal(videoSide(350, rect), 'right');
+});
+
+test('the picture is centred in its box, with bars on the sides that do not fit', () => {
+    const screen = { left: 0, top: 0, width: 1920, height: 1080 };
+    // Portrait on a landscape screen: bars left and right.
+    assert.deepEqual(pictureRect(screen, 1080, 1920), { left: 656.25, top: 0, width: 607.5, height: 1080 });
+    // Wide panorama: bars top and bottom.
+    assert.deepEqual(pictureRect(screen, 4000, 1000), { left: 0, top: 300, width: 1920, height: 480 });
+    // Size unknown yet (not loaded): the whole box counts as picture, so nothing is mistaken for a bar.
+    assert.equal(pictureRect(screen, 0, 0), screen);
 });
